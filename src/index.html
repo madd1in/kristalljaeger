@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#130a2e">
+  <meta name="description" content="Kristalljäger – 3D-Arcade im Browser: Kristalle sammeln, Minen rammen, Power-ups schnappen.">
+  <title>Kristalljäger</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💎</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="vignette"></div>
+  <div id="flash"></div>
+
+  <!-- HUD – Layout aus Figma "Kristalljäger – HUD & UI" -->
+  <div id="hud" hidden>
+    <div class="panel score"><span class="label">PUNKTE</span><span id="score" class="value">0</span></div>
+    <div id="buffs">
+      <div class="buff magnet" id="buff-magnet"><span>🧲</span><i><b id="buffFill-magnet"></b></i></div>
+      <div class="buff double" id="buff-double"><span>✖2</span><i><b id="buffFill-double"></b></i></div>
+    </div>
+    <div class="panel timer" id="timerPanel"><span class="label">ZEIT</span><span id="time" class="value">1:00</span></div>
+    <div id="combo"><span id="comboText">KOMBO x2</span><i><b id="comboFill"></b></i></div>
+    <div class="panel shield">
+      <span class="label">SCHILD</span>
+      <div class="pips"><i id="pip0"></i><i id="pip1"></i><i id="pip2"></i></div>
+      <div class="boost" title="Boost"><div id="boostFill"></div></div>
+    </div>
+    <button id="btnPauseHud" class="icon-btn" aria-label="Pause">❚❚</button>
+    <div id="toast"></div>
+    <div id="announce"></div>
+    <div id="popups"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+    <div class="hint keys-only">WASD / Pfeile: fliegen &nbsp;·&nbsp; Leertaste: Boost (rammt Minen!) &nbsp;·&nbsp; P: Pause &nbsp;·&nbsp; M: Ton</div>
+  </div>
+
+  <div id="touch" hidden>
+    <div id="joyZone"></div>
+    <div id="joyBase"><div id="joyKnob"></div></div>
+    <button id="btnBoost" aria-label="Boost"><span>BOOST</span></button>
+  </div>
+
+  <div id="fps" hidden></div>
+
+  <section id="loading" class="screen">
+    <div class="load-box">
+      <div class="logo">KRISTALL<span>JÄGER</span></div>
+      <div class="load-bar"><div id="loadFill"></div></div>
+      <div class="load-meta"><span id="loadLabel">Starte …</span><span id="loadPct">0 %</span></div>
+      <p id="loadError" class="error" hidden>Spiel konnte nicht gestartet werden.<br>Bitte neu laden. Falls es wieder passiert: Ist WebGL / Hardwarebeschleunigung im Browser aktiv?</p>
+    </div>
+  </section>
+
+  <section id="start" class="screen" hidden>
+    <h1 class="sr">Kristalljäger</h1>
+    <div class="content">
+      <ul class="howto">
+        <li><b>💎</b>Kristalle sammeln – schnell hintereinander gibt Kombos</li>
+        <li><b>💣</b>Minen ausweichen – oder mit Boost rammen</li>
+        <li><b>⚡</b>Power-ups: Magnet, Punkte x2, +5 Sekunden, Schild</li>
+      </ul>
+      <p class="sub keys-only">WASD / Pfeile: fliegen · Leertaste: Boost</p>
+      <p class="sub touch-only">Links ziehen: fliegen · Rechts tippen: Boost</p>
+      <div class="row">
+        <button id="btnStart" class="btn primary" disabled>SPIEL STARTEN</button>
+        <button id="btnSettingsStart" class="btn ghost">⚙ EINSTELLUNGEN</button>
+      </div>
+      <p id="bestStart" class="best" hidden></p>
+    </div>
+  </section>
+
+  <section id="pause" class="screen" hidden>
+    <div class="card">
+      <h2>PAUSE</h2>
+      <div class="col">
+        <button id="btnResume" class="btn primary">WEITER</button>
+        <button id="btnRestart" class="btn ghost">NEUSTART</button>
+        <button id="btnSettingsPause" class="btn ghost">⚙ EINSTELLUNGEN</button>
+        <button id="btnMenuPause" class="btn ghost">MENÜ</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="settings" class="screen" hidden>
+    <div class="card settings">
+      <h2>EINSTELLUNGEN</h2>
+      <div class="setting">
+        <span>Grafik</span>
+        <div class="seg" id="qualitySeg">
+          <button data-quality="auto">Auto</button>
+          <button data-quality="high">Hoch</button>
+          <button data-quality="medium">Mittel</button>
+          <button data-quality="low">Niedrig</button>
+        </div>
+      </div>
+      <div class="setting"><span>Musik</span><button class="toggle" id="tglMusic" aria-pressed="true" aria-label="Musik"></button></div>
+      <div class="setting"><span>Effekte</span><button class="toggle" id="tglSfx" aria-pressed="true" aria-label="Effekte"></button></div>
+      <div class="setting"><span>FPS anzeigen</span><button class="toggle" id="tglFps" aria-pressed="false" aria-label="FPS anzeigen"></button></div>
+      <p class="note" id="qualityNote"></p>
+      <button id="btnSettingsBack" class="btn primary">ZURÜCK</button>
+    </div>
+  </section>
+
+  <section id="over" class="screen" hidden>
+    <div class="card result">
+      <h2 id="overTitle">ZEIT ABGELAUFEN!</h2>
+      <div class="rank-row">
+        <div id="overRank" class="rank">B</div>
+        <div>
+          <div id="overScore" class="big">0 Punkte</div>
+          <div id="overRankText" class="stats"></div>
+        </div>
+      </div>
+      <div id="overBest" class="newbest" hidden>★ NEUER BESTWERT ★</div>
+      <dl class="statgrid">
+        <div><dt>Kristalle</dt><dd id="stCrystals">0</dd></div>
+        <div><dt>Beste Kombo</dt><dd id="stCombo">x1</dd></div>
+        <div><dt>Minen gerammt</dt><dd id="stMines">0</dd></div>
+        <div><dt>Power-ups</dt><dd id="stPower">0</dd></div>
+      </dl>
+      <div class="row">
+        <button id="btnAgain" class="btn primary">NOCHMAL</button>
+        <button id="btnMenu" class="btn ghost">MENÜ</button>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    // Sichtbarer Hinweis statt Endlos-Ladebalken, falls der Spielcode beim Start abbricht (z. B. kein WebGL)
+    function showLoadError(detail) {
+      if (window.__kj) return;
+      const el = document.getElementById('loadError');
+      el.hidden = false;
+      if (detail) el.title = detail;
+      document.getElementById('loadLabel').textContent = 'Fehler';
+    }
+    window.addEventListener('error', (e) => showLoadError(e.message));
+    setTimeout(() => showLoadError(), 5000);
+  </script>
+  <!--GAME_SCRIPT-->
+</body>
+</html>
