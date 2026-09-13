@@ -1,5 +1,5 @@
 // Automatisch erzeugt von build.mjs – nicht von Hand bearbeiten
-const CACHE = 'kristalljaeger-2c4aa54024c3';
+const CACHE = 'kristalljaeger-0f480da07839';
 const FILES = [
   "./",
   "index.html",
@@ -25,6 +25,11 @@ const FILES = [
   "assets/sfx-titan-hit.mp3",
   "assets/sfx-titan.mp3",
   "assets/sfx-unlock.mp3",
+  "assets/skin-aurora.png",
+  "assets/skin-gold.png",
+  "assets/skin-neon.png",
+  "assets/skin-standard.png",
+  "assets/skin-stealth.png",
   "assets/start.mp3",
   "assets/storm.mp3",
   "assets/title.jpg",

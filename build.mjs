@@ -13,6 +13,7 @@ const result = await build({
   target: 'es2020',
   write: false,
   legalComments: 'none',
+  loader: { '.glb': 'binary' }, // Blender-Modelle werden als Uint8Array eingebettet
 });
 
 const js = result.outputFiles[0].text;

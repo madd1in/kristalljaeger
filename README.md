@@ -60,9 +60,14 @@ Die GitHub Action **Build-Check** baut bei jedem Push neu und schlägt fehl, wen
 | `src/config.js` | Balance, Welten, Skins, Aufträge, Grafikstufen |
 | `src/progress.js` | Profil, Freischaltungen, Tages-Challenge |
 | `src/audio.js` / `src/input.js` | Sound / Tastatur, Touch, Gamepad |
+| `src/models.js` + `src/models/*.glb` | In Blender modellierte Drohne, Mine und Kristall (werden ins Bundle eingebettet) |
+| `blender/kristalljaeger-modelle.blend` | Blender-Quelldatei der Modelle, Kamera & Licht für die Skin-Vorschaubilder |
+
+**Modelle ändern:** `.blend` in Blender öffnen, Objekt „Drone“, „Mine“ oder „Crystal“ bearbeiten (Materialnamen `Body`, `Accent`, `Glow` beibehalten – das Spiel färbt danach um), als GLB nach `src/models/` exportieren (+Y oben, Modifikatoren anwenden), dann `npm run build`.
 
 ## Credits
 
 - Musik, Soundeffekte, Sprachansagen, Titelbild und App-Icon: generiert mit ElevenLabs
+- 3D-Modelle (Drohne, Minen, Kristalle) und Hangar-Vorschaubilder: Blender (über Blender MCP)
 - HUD/UI-Entwürfe: Figma
 - Code: erstellt mit Claude Code

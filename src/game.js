@@ -8,6 +8,7 @@ import * as C from './config.js';
 import { AudioManager } from './audio.js';
 import { Input } from './input.js';
 import { createWorld, GlowLayer, Particles, rand } from './world.js';
+import { loadModels } from './models.js';
 import {
   dailyBiome, hashString, isBiomeUnlocked, isSkinUnlocked, loadProfile, mulberry32, pickMissions,
   readStorage, saveProfile, todayKey, writeStorage,
@@ -151,10 +152,39 @@ player.add(tilt);
   }
   tilt.traverse((o) => { if (o.isMesh) o.castShadow = true; });
 }
-const thruster = new THREE.Mesh(new THREE.ConeGeometry(0.2, 1, 8), thrusterMat);
-thruster.rotation.x = Math.PI / 2;
-tilt.add(thruster);
+// Triebwerksflammen: zuerst eine mittig (Platzhalter-Drohne), nach dem Laden je eine pro Gondel
+const thrusterGeo = new THREE.ConeGeometry(0.2, 1, 8).rotateX(Math.PI / 2).translate(0, 0, 0.5);
+let thrusters = [];
+function setThrusters(spots) {
+  for (const t of thrusters) tilt.remove(t);
+  thrusters = spots.map(({ x, y, z, r }) => {
+    const t = new THREE.Mesh(thrusterGeo, thrusterMat);
+    t.position.set(x, y, z);
+    t.scale.set(r, r, 1);
+    t.userData.baseScale = r;
+    tilt.add(t);
+    return t;
+  });
+}
+setThrusters([{ x: 0, y: 0, z: 0.6, r: 1 }]);
 tilt.scale.setScalar(1.35);
+
+// Blender-Drohne einsetzen: Hülle (Body/Accent als Vertex-Helligkeit) + Leuchtteile
+function useDroneModel(model) {
+  for (const child of [...tilt.children]) {
+    if (!thrusters.includes(child)) tilt.remove(child);
+  }
+  droneBody.vertexColors = true;
+  droneBody.needsUpdate = true;
+  const shell = new THREE.Mesh(model.shell, droneBody);
+  const glowParts = new THREE.Mesh(model.glow, droneGlow);
+  shell.castShadow = true;
+  glowParts.castShadow = true;
+  tilt.add(shell, glowParts);
+  // Gondel-Enden im Modell: x ±0.6, y -0.2, z +0.7 (Blender -Y = hinten)
+  setThrusters([{ x: -0.6, y: -0.2, z: 0.7, r: 0.55 }, { x: 0.6, y: -0.2, z: 0.7, r: 0.55 }]);
+  tilt.scale.setScalar(1.45);
+}
 scene.add(player);
 
 const COLORS = {
@@ -186,7 +216,7 @@ function applySkin(id) {
 // ---------------------------------------------------------------------------
 // Kristalle, Minen, Power-ups – Geometrien & Materialien
 // ---------------------------------------------------------------------------
-const crystalGeo = new THREE.OctahedronGeometry(0.62, 0);
+let crystalGeo = new THREE.OctahedronGeometry(0.62, 0);
 crystalGeo.scale(1, 1.7, 1);
 const crystalMats = {};
 const crystalBurst = {};
@@ -204,7 +234,7 @@ const SPIKE_DIRS = [
 ].map(([x, y, z]) => new THREE.Vector3(x, y, z).normalize());
 
 // Kern + 14 Stacheln zu einer Geometrie verschmolzen: 1 Draw Call statt 15 pro Mine
-const mineGeo = (() => {
+let mineGeo = (() => {
   const parts = [new THREE.IcosahedronGeometry(0.6, 0)];
   const q = new THREE.Quaternion();
   for (const dir of SPIKE_DIRS) {
@@ -215,7 +245,7 @@ const mineGeo = (() => {
   }
   return mergeGeometries(parts);
 })();
-const eyeGeo = mergeGeometries([
+let eyeGeo = mergeGeometries([
   new THREE.SphereGeometry(0.1, 8, 6).translate(-0.18, 0.12, -0.55),
   new THREE.SphereGeometry(0.1, 8, 6).translate(0.18, 0.12, -0.55),
 ]);
@@ -227,7 +257,7 @@ const mineGlow = { normal: color('#ef4444', 0.55), hunter: color('#a855f7', 0.7)
 
 // Titan-Mine: gleiche Grundform, dunkles Metall, glühende Ringe
 const titanMats = {
-  body: std('#27272a', { metalness: 0.75, roughness: 0.35 }),
+  body: std('#52525b', { metalness: 0.7, roughness: 0.35 }),
   eye: new THREE.MeshStandardMaterial({ color: '#fb923c', emissive: '#f97316', emissiveIntensity: 3 }),
   ring: new THREE.MeshStandardMaterial({ color: '#f97316', emissive: '#ea580c', emissiveIntensity: 2.2, flatShading: true }),
 };
@@ -717,7 +747,7 @@ function renderHangar() {
   $('skinList').innerHTML = C.SKINS.map((skin) => {
     const unlocked = isSkinUnlocked(profile, skin);
     return `<button class="skin${unlocked ? '' : ' locked'}" data-skin="${skin.id}" aria-pressed="${skin.id === profile.skin}" ${unlocked ? '' : 'aria-disabled="true"'}>
-      <span class="swatch" style="--body:${skin.body};--glow:${skin.glow}"></span>
+      <img class="skin-img" src="assets/skin-${skin.id}.png" alt="" loading="lazy" style="--glow:${skin.glow}">
       <span class="skin-name">${skin.name}</span>
       <span class="skin-detail">${unlocked ? (skin.id === profile.skin ? 'Ausgewählt' : 'Freigeschaltet') : `🔒 ${fmt(skin.unlock)} 💎`}</span>
     </button>`;
@@ -1096,8 +1126,8 @@ function updatePlayer(dt, t) {
   player.rotation.y = yaw;
   tilt.rotation.z = THREE.MathUtils.lerp(tilt.rotation.z, clamp(turn * 0.6, -0.5, 0.5), 1 - Math.exp(-8 * dt));
   tilt.rotation.x = THREE.MathUtils.lerp(tilt.rotation.x, -(speed / 20) * 0.4, 1 - Math.exp(-8 * dt));
-  thruster.scale.set(1, 0.4 + speed / 9 + (boosting ? 1.2 : 0), 1);
-  thruster.position.z = 0.6 + thruster.scale.y * 0.5;
+  const flame = 0.4 + speed / 9 + (boosting ? 1.2 : 0);
+  for (const t of thrusters) t.scale.z = flame * (0.6 + t.userData.baseScale * 0.4);
   engine?.set(0.1 + (speed / 20) * 0.35 + (boosting ? 0.15 : 0), 0.8 + (speed / 20) * 0.7);
 
   trailTimer -= dt;
@@ -1364,7 +1394,7 @@ function updateCamera(dt, t) {
     const a = t * 0.35;
     const dist = portrait ? 11 : 9;
     camGoal.set(player.position.x + Math.sin(a) * dist, 3.4, player.position.z + Math.cos(a) * dist);
-    lookGoal.set(player.position.x, portrait ? -2.2 : -0.7, player.position.z);
+    lookGoal.set(player.position.x, portrait ? -2.6 : -1.5, player.position.z);
     camera.position.lerp(camGoal, 1 - Math.exp(-3 * dt));
   } else {
     camGoal.set(player.position.x * 0.8, portrait ? 25 : 16, player.position.z * 0.8 + (portrait ? 14 : 16));
@@ -1438,6 +1468,19 @@ renderer.setAnimationLoop(() => {
 // ---------------------------------------------------------------------------
 // Laden mit Fortschrittsbalken
 // ---------------------------------------------------------------------------
+// Geometrien der Blender-Modelle übernehmen; neue Kristalle/Minen nutzen sie automatisch
+function applyModels(models) {
+  useDroneModel(models.drone);
+  mineGeo = models.mine.shell;
+  eyeGeo = models.mine.glow;
+  for (const mat of [mineMats.normal.body, mineMats.hunter.body, titanMats.body]) {
+    mat.vertexColors = true;
+    mat.needsUpdate = true;
+  }
+  crystalGeo = models.crystal.scale(1.15, 1.15, 1.15);
+  resetWorld();
+}
+
 function loadImage(url) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -1448,7 +1491,7 @@ function loadImage(url) {
 
 async function loadAll() {
   const audioEntries = Object.entries(C.ASSETS.audio);
-  const total = audioEntries.length + 2; // + Titelbild + Shader
+  const total = audioEntries.length + 3; // + Titelbild + 3D-Modelle + Shader
   let done = 0;
   const progress = (label) => {
     done++;
@@ -1461,6 +1504,15 @@ async function loadAll() {
   $('loadLabel').textContent = 'Lade Musik & Sounds …';
   await Promise.all([
     loadImage(C.ASSETS.image.title).then(() => progress()),
+    loadModels()
+      .then((models) => {
+        applyModels(models);
+        progress('3D-Modelle geladen …');
+      })
+      .catch((err) => {
+        console.warn('Blender-Modelle nicht geladen, nutze einfache Formen', err);
+        progress();
+      }),
     ...audioEntries.map(([name, url]) => audio.load(name, url).then(() => progress(name === 'bgm' ? 'Musik geladen …' : null))),
   ]);
 
