@@ -15,8 +15,10 @@ export class AudioManager {
     this.duck = 1;
     this.pauseDuck = 1;
     this.currentVoice = null;
-    this.musicSource = null;
-    this.musicElement = null;
+    this.musicTrack = null;
+    this.musicName = null;
+    this.wantedMusic = 'bgm';
+    this.musicStarted = false;
 
     if (this.ctx) {
       this.master = this.ctx.createGain();
@@ -153,23 +155,52 @@ export class AudioManager {
     this.setDuck(1);
   }
 
+  // Merkt sich den gewünschten Titel; gespielt wird erst nach der ersten Nutzer-Geste (startMusic)
+  setMusic(name) {
+    this.wantedMusic = name;
+    if (this.musicStarted) this.crossfadeTo(name);
+  }
+
   startMusic() {
-    if (this.musicSource || this.musicElement) return;
-    const buffer = this.buffers.get('bgm');
+    this.musicStarted = true;
+    this.crossfadeTo(this.wantedMusic || 'bgm');
+  }
+
+  crossfadeTo(name) {
+    if (this.musicName === name) return;
+    const buffer = this.buffers.get(name);
+    const element = this.elements.get(name);
+    if (!buffer && !element) return;
+    const old = this.musicTrack;
+    this.musicName = name;
+
     if (buffer) {
+      const t = this.ctx.currentTime;
       const src = this.ctx.createBufferSource();
       src.buffer = buffer;
       src.loop = true;
       const { start, end } = trimSilence(buffer);
       src.loopStart = start;
       src.loopEnd = end;
-      src.connect(this.musicGain);
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(old ? 0 : 1, t);
+      if (old) gain.gain.setTargetAtTime(1, t, 0.45);
+      src.connect(gain).connect(this.musicGain);
       src.start(0, start);
-      this.musicSource = src;
-    } else if (this.elements.has('bgm')) {
-      this.musicElement = this.elements.get('bgm');
-      this.musicElement.loop = true;
-      this.musicElement.play().catch(() => {});
+      this.musicTrack = { src, gain };
+    } else {
+      element.loop = true;
+      element.currentTime = 0;
+      element.play().catch(() => {});
+      this.musicTrack = { element };
+    }
+
+    if (old?.src) {
+      const t = this.ctx.currentTime;
+      old.gain.gain.setTargetAtTime(0, t, 0.35);
+      old.src.stop(t + 2.5);
+    } else if (old?.element) {
+      old.element.pause();
     }
     this.applyMusicVolume();
   }
@@ -187,7 +218,7 @@ export class AudioManager {
   applyMusicVolume() {
     const v = this.musicOn && !this.muted ? MUSIC_VOLUME * this.duck * this.pauseDuck : 0;
     if (this.ctx) this.musicGain.gain.setTargetAtTime(v, this.ctx.currentTime, 0.15);
-    if (this.musicElement) this.musicElement.volume = v;
+    if (this.musicTrack?.element) this.musicTrack.element.volume = v;
   }
 
   setMusicOn(on) {

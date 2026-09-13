@@ -19,6 +19,27 @@ export const POWERUP_LIFETIME = 9;
 export const MISSION_BONUS = 100;
 
 export const LAVA = { every: [2.8, 4.6], warn: 1.4, radius: 2.4, aimAtPlayer: 0.55 };
+
+// Titan-Mine (Boss): nur mit Boost verwundbar
+export const TITAN = { hp: 5, speed: 2.3, reach: 2.5, points: 400, hitPoints: 50, goldDrop: 8, normalAt: 20, endlessFirst: 45, endlessEvery: 60 };
+
+// Endlos-Modus: kein Timer, Schwierigkeit steigt, Ende bei 0 Schild
+export const ENDLESS = { stormEvery: 50, mineEvery: 8, maxMines: 12, shieldWeight: 45 };
+
+export const ACHIEVEMENTS = [
+  { id: 'first', icon: '🚀', name: 'Erster Flug', text: 'Spiele deine erste Runde' },
+  { id: 'combo5', icon: '🔥', name: 'Kombo-König', text: 'Erreiche Kombo x5' },
+  { id: 'smash5', icon: '💥', name: 'Minenbrecher', text: 'Ramme 5 Minen in einer Runde' },
+  { id: 'titan', icon: '🗿', name: 'Titanbezwinger', text: 'Besiege die Titan-Mine' },
+  { id: 'missions3', icon: '🎯', name: 'Perfektionist', text: 'Erfülle alle 3 Aufträge einer Runde' },
+  { id: 'rankS', icon: '👑', name: 'Legende', text: 'Erreiche Rang S' },
+  { id: 'frost', icon: '❄️', name: 'Eisläufer', text: 'Schalte die Frostinsel frei' },
+  { id: 'volcano', icon: '🌋', name: 'Feuerprobe', text: 'Schalte die Vulkaninsel frei' },
+  { id: 'gold10', icon: '🥇', name: 'Goldgräber', text: 'Sammle insgesamt 10 goldene Kristalle' },
+  { id: 'crystals1000', icon: '💎', name: 'Kristallsammler', text: 'Sammle insgesamt 1 000 Kristalle' },
+  { id: 'endless180', icon: '⏳', name: 'Unermüdlich', text: 'Überlebe 3 Minuten im Endlos-Modus' },
+  { id: 'daily', icon: '📅', name: 'Tagesjäger', text: 'Spiele eine Tages-Challenge' },
+];
 export const ICE = { patches: 7, drag: 0.65, accel: 0.55 };
 
 export const CRYSTAL_TYPES = {
@@ -45,7 +66,7 @@ export const RANKS = [
 // Welten: Farben der Umgebung, Deko-Stil und Gefahr
 export const BIOMES = {
   meadow: {
-    name: 'Wieseninsel', icon: '🌿', unlock: null, hazard: null, voice: 'start',
+    name: 'Wieseninsel', icon: '🌿', unlock: null, hazard: null, voice: 'start', music: 'bgm',
     sky: ['#130a2e', '#7a3c78', '#0c3a4d'], fog: '#2a1d52', exposure: 1.05, bloomThreshold: 0.55,
     hemi: ['#a5e8ff', '#46206a', 1.3], sun: ['#ffd2a1', 2.7],
     ground: ['#3b6b33', '#4f853b'], side: '#5b4636', under: ['#5d4c73', '#241b38'],
@@ -55,7 +76,7 @@ export const BIOMES = {
     dust: { mode: 0, color: '#fef3c7' }, ring: '#5eead4',
   },
   frost: {
-    name: 'Frostinsel', icon: '❄️', unlock: { biome: 'meadow', score: 700 }, hazard: 'ice', voice: 'frost',
+    name: 'Frostinsel', icon: '❄️', unlock: { biome: 'meadow', score: 700 }, hazard: 'ice', voice: 'frost', music: 'bgmFrost',
     sky: ['#0a1330', '#3d6aa3', '#0b2a44'], fog: '#1d3558', exposure: 0.8, bloomThreshold: 0.95,
     hemi: ['#c7dcf5', '#1e3a8a', 0.9], sun: ['#dbeafe', 1.5],
     ground: ['#7f96b2', '#a3b7cc'], side: '#5a7190', under: ['#5b7598', '#1e2b4a'],
@@ -65,7 +86,7 @@ export const BIOMES = {
     dust: { mode: 1, color: '#e0f2fe' }, ring: '#93c5fd',
   },
   volcano: {
-    name: 'Vulkaninsel', icon: '🌋', unlock: { biome: 'frost', score: 700 }, hazard: 'lava', voice: 'volcano',
+    name: 'Vulkaninsel', icon: '🌋', unlock: { biome: 'frost', score: 700 }, hazard: 'lava', voice: 'volcano', music: 'bgmVolcano', titan: true,
     sky: ['#12060a', '#7a2412', '#2a0a0a'], fog: '#3a100c', exposure: 1.1, bloomThreshold: 0.55,
     hemi: ['#fdba74', '#450a0a', 1.05], sun: ['#ffb38a', 2.5],
     ground: ['#2e2628', '#3d3234'], side: '#211a1b', under: ['#3b2a2a', '#120b0b'],
@@ -111,7 +132,15 @@ export const ASSETS = {
   image: { title: 'assets/title.jpg' },
   audio: {
     bgm: 'assets/bgm.mp3',
+    bgmFrost: 'assets/bgm-frost.mp3',
+    bgmVolcano: 'assets/bgm-volcano.mp3',
     engine: 'assets/sfx-engine.mp3',
+    titanRoar: 'assets/sfx-titan.mp3',
+    titanHit: 'assets/sfx-titan-hit.mp3',
+    titan: 'assets/voice-titan.mp3',
+    titanDown: 'assets/voice-titan-down.mp3',
+    endless: 'assets/voice-endless.mp3',
+    achievement: 'assets/voice-achievement.mp3',
     pickup: 'assets/sfx-pickup.mp3',
     hit: 'assets/sfx-hit.mp3',
     boost: 'assets/sfx-boost.mp3',

@@ -1,0 +1,30 @@
+name: Build-Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Spiel bauen
+        run: npm run build
+
+      - name: Build-Ausgabe ist eingecheckt und aktuell
+        run: |
+          if ! git diff --exit-code -- index.html sw.js; then
+            echo "::error::index.html oder sw.js sind veraltet – bitte lokal 'npm run build' ausführen und committen."
+            exit 1
+          fi

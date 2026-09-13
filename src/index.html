@@ -29,8 +29,12 @@
       <div class="buff magnet" id="buff-magnet"><span>🧲</span><i><b id="buffFill-magnet"></b></i></div>
       <div class="buff double" id="buff-double"><span>✖2</span><i><b id="buffFill-double"></b></i></div>
     </div>
-    <div class="panel timer" id="timerPanel"><span class="label">ZEIT</span><span id="time" class="value">1:00</span></div>
+    <div class="panel timer" id="timerPanel"><span class="label" id="timerLabel">ZEIT</span><span id="time" class="value">1:00</span></div>
     <div id="combo"><span id="comboText">KOMBO x2</span><i><b id="comboFill"></b></i></div>
+    <div id="bossBar">
+      <span>🗿 TITAN-MINE</span>
+      <div class="boss-pips"><i id="bossPip0"></i><i id="bossPip1"></i><i id="bossPip2"></i><i id="bossPip3"></i><i id="bossPip4"></i></div>
+    </div>
     <div class="panel shield">
       <span class="label">SCHILD</span>
       <div class="pips"><i id="pip0"></i><i id="pip1"></i><i id="pip2"></i></div>
@@ -79,9 +83,11 @@
       <div class="row">
         <button id="btnStart" class="btn primary">▶ SPIELEN</button>
         <button id="btnDaily" class="btn daily">📅 TAGES-CHALLENGE<small id="dailyInfo"></small></button>
+        <button id="btnEndless" class="btn endless">♾ ENDLOS<small id="endlessInfo"></small></button>
       </div>
       <div class="row">
         <button id="btnHangar" class="btn ghost">🛸 HANGAR</button>
+        <button id="btnAwards" class="btn ghost">🏆 ERFOLGE</button>
         <button id="btnSettingsStart" class="btn ghost">⚙ EINSTELLUNGEN</button>
         <button id="btnInstall" class="btn ghost" hidden>📲 APP INSTALLIEREN</button>
       </div>
@@ -96,6 +102,15 @@
       <p class="stats">Kristalle insgesamt: <b id="totalCrystals">0</b> 💎</p>
       <div id="skinList" class="skins"></div>
       <button id="btnHangarBack" class="btn primary">FERTIG</button>
+    </div>
+  </section>
+
+  <section id="awards" class="screen" hidden>
+    <div class="card awards">
+      <h2>ERFOLGE</h2>
+      <p id="awardsCount" class="stats"></p>
+      <ul id="awardList" class="award-list"></ul>
+      <button id="btnAwardsBack" class="btn primary">ZURÜCK</button>
     </div>
   </section>
 
@@ -127,6 +142,8 @@
       <div class="setting"><span>Musik</span><button class="toggle" id="tglMusic" aria-pressed="true" aria-label="Musik"></button></div>
       <div class="setting"><span>Effekte</span><button class="toggle" id="tglSfx" aria-pressed="true" aria-label="Effekte"></button></div>
       <div class="setting"><span>FPS anzeigen</span><button class="toggle" id="tglFps" aria-pressed="false" aria-label="FPS anzeigen"></button></div>
+      <div class="setting"><span>Kamerawackeln</span><button class="toggle" id="tglShake" aria-pressed="true" aria-label="Kamerawackeln"></button></div>
+      <div class="setting"><span>Vibration (Handy)</span><button class="toggle" id="tglVibe" aria-pressed="true" aria-label="Vibration"></button></div>
       <p class="note" id="qualityNote"></p>
       <button id="btnSettingsBack" class="btn primary">ZURÜCK</button>
     </div>
@@ -154,10 +171,17 @@
       <ul id="overMissions" class="mission-list"></ul>
       <div class="row">
         <button id="btnAgain" class="btn primary">NOCHMAL</button>
+        <button id="btnShare" class="btn ghost">📤 TEILEN</button>
         <button id="btnMenu" class="btn ghost">MENÜ</button>
       </div>
     </div>
   </section>
+
+  <!-- über allen Screens, damit Erfolge auch auf dem Ergebnis-Screen sichtbar sind -->
+  <div id="achievementToast">
+    <span id="achievementIcon" class="award-icon">🏆</span>
+    <span><small>ERFOLG FREIGESCHALTET</small><b id="achievementName"></b><em id="achievementText"></em></span>
+  </div>
 
   <script>
     // Sichtbarer Hinweis statt Endlos-Ladebalken, falls der Spielcode beim Start abbricht (z. B. kein WebGL)

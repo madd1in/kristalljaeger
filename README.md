@@ -21,6 +21,11 @@
   - 🌿 **Wieseninsel** – der Einstieg
   - ❄️ **Frostinsel** – Glatteis-Flächen, auf denen die Drohne rutscht (freigeschaltet ab 700 Punkten auf der Wiese)
   - 🌋 **Vulkaninsel** – Lava-Geysire mit Vorwarnung (freigeschaltet ab 700 Punkten auf Frost)
+- **♾ Endlos-Modus:** kein Timer – überleben, bis das Schild bricht; Kristallsturm alle 50 s, Titan alle 60 s
+- **🗿 Titan-Mine (Boss):** nur mit Boost verwundbar, 5 Treffer; auf der Vulkaninsel 20 s vor Schluss und im Endlos-Modus. Belohnung: +400, Schild und ein Ring aus Goldkristallen
+- **🏆 12 Erfolge** mit Einblendung und eigener Übersicht
+- **Musik pro Welt** mit weicher Überblendung beim Wechsel
+- **📤 Teilen** des Ergebnisses (Teilen-Menü am Handy, sonst Zwischenablage)
 - **Aufträge:** 3 zufällige pro Runde (z. B. „Ramme 3 Minen“, „Kombo x5“), je +100 Punkte
 - **📅 Tages-Challenge:** jeden Tag dieselbe Welt, dieselben Aufträge und Spawns für alle – eigener Tages-Bestwert
 - **🛸 Hangar:** 5 Drohnen-Skins, freigeschaltet über insgesamt gesammelte Kristalle
@@ -28,6 +33,7 @@
 - **Power-ups:** 🧲 Magnet · ✖2 Punkte · ⏱ +5 Sekunden · 🛡 Schild
 - **Kristallsturm** zur Halbzeit, **Jäger-Mine** ab Sekunde 25, **Rang S–D**
 - **Grafikstufen** Auto / Hoch / Mittel / Niedrig (Auto regelt bei Rucklern herunter), Bloom auf „Hoch“
+- **Optionen:** Musik, Effekte, FPS-Anzeige, Kamerawackeln und Vibration abschaltbar
 - Ladebalken, Hintergrundmusik, Triebwerksgeräusch, Soundeffekte, deutsche Sprachansagen
 - **PWA:** installierbar, Offline-Cache per Service Worker
 
@@ -44,6 +50,8 @@
 npm install
 npm run build      # erzeugt index.html und sw.js aus src/
 ```
+
+Die GitHub Action **Build-Check** baut bei jedem Push neu und schlägt fehl, wenn `index.html`/`sw.js` nicht zum Quellcode passen (also `npm run build` vor dem Commit vergessen wurde).
 
 | Datei | Inhalt |
 |---|---|

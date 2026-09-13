@@ -18,6 +18,7 @@ export function loadProfile() {
   const profile = {
     bestByBiome: {}, totalCrystals: 0, daily: { date: '', best: 0 },
     skin: 'standard', biome: 'meadow', seenTutorial: false, games: 0,
+    achievements: {}, totalGold: 0, endlessBest: { score: 0, time: 0 },
     ...readStorage(STORAGE_KEYS.profile, {}),
   };
   // Bestwert aus v2 übernehmen

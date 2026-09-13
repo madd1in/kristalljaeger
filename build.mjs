@@ -18,7 +18,9 @@ const result = await build({
 const js = result.outputFiles[0].text;
 if (js.includes('</script')) throw new Error('Bundle enthält </script> – kann nicht eingebettet werden');
 
-const template = await readFile('src/index.html', 'utf8');
+// Zeilenenden vereinheitlichen, damit Windows und die CI identische Dateien erzeugen
+const normalize = (text) => text.replace(/\r\n/g, '\n');
+const template = normalize(await readFile('src/index.html', 'utf8'));
 if (!template.includes('<!--GAME_SCRIPT-->')) throw new Error('Platzhalter <!--GAME_SCRIPT--> fehlt in src/index.html');
 
 const html = template.replace('<!--GAME_SCRIPT-->', () => `<script>\n${js}</script>`);
@@ -30,7 +32,11 @@ const icons = (await readdir('icons')).sort().map((f) => `icons/${f}`);
 const files = ['./', 'index.html', 'style.css', 'manifest.webmanifest', ...icons, ...assets];
 
 const hash = createHash('sha256');
-for (const file of files.slice(1)) hash.update(await readFile(file));
+const TEXT = /\.(html|css|js|json|webmanifest)$/;
+for (const file of files.slice(1)) {
+  const data = await readFile(file);
+  hash.update(TEXT.test(file) ? normalize(data.toString('utf8')) : data);
+}
 const version = hash.digest('hex').slice(0, 12);
 
 const sw = `// Automatisch erzeugt von build.mjs – nicht von Hand bearbeiten

@@ -1,5 +1,5 @@
 // Automatisch erzeugt von build.mjs – nicht von Hand bearbeiten
-const CACHE = 'kristalljaeger-cc099d75250f';
+const CACHE = 'kristalljaeger-2c4aa54024c3';
 const FILES = [
   "./",
   "index.html",
@@ -8,6 +8,8 @@ const FILES = [
   "icons/icon-192.png",
   "icons/icon-512.png",
   "icons/maskable-512.png",
+  "assets/bgm-frost.mp3",
+  "assets/bgm-volcano.mp3",
   "assets/bgm.mp3",
   "assets/end.mp3",
   "assets/record.mp3",
@@ -20,11 +22,17 @@ const FILES = [
   "assets/sfx-pickup.mp3",
   "assets/sfx-powerup.mp3",
   "assets/sfx-smash.mp3",
+  "assets/sfx-titan-hit.mp3",
+  "assets/sfx-titan.mp3",
   "assets/sfx-unlock.mp3",
   "assets/start.mp3",
   "assets/storm.mp3",
   "assets/title.jpg",
+  "assets/voice-achievement.mp3",
+  "assets/voice-endless.mp3",
   "assets/voice-frost.mp3",
+  "assets/voice-titan-down.mp3",
+  "assets/voice-titan.mp3",
   "assets/voice-unlock.mp3",
   "assets/voice-volcano.mp3",
   "assets/warn10.mp3"

@@ -20,10 +20,14 @@ const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const fmt = (n) => Math.round(n).toLocaleString('de-DE').replace(/\./g, ' ');
+const clock = (seconds, roundUp) => {
+  const s = roundUp ? Math.ceil(seconds) : Math.floor(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
 const color = (hex, scale = 1) => new THREE.Color(hex).multiplyScalar(scale);
 const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 
-const settings = { quality: 'auto', music: true, sfx: true, fps: false, ...readStorage(C.STORAGE_KEYS.settings, {}) };
+const settings = { quality: 'auto', music: true, sfx: true, fps: false, shake: true, vibration: true, ...readStorage(C.STORAGE_KEYS.settings, {}) };
 const saveSettings = () => writeStorage(C.STORAGE_KEYS.settings, settings);
 const profile = loadProfile();
 
@@ -64,6 +68,7 @@ function switchWorld(key) {
   world.setBiome(key);
   renderer.toneMappingExposure = b.exposure;
   if (bloomPass) bloomPass.threshold = b.bloomThreshold;
+  audio.setMusic(b.music);
 }
 
 function applyQuality(name) {
@@ -218,7 +223,15 @@ const mineMats = {
   normal: { body: std('#4a0f14', { metalness: 0.5, roughness: 0.5 }), eye: new THREE.MeshStandardMaterial({ color: '#ef4444', emissive: '#ef4444', emissiveIntensity: 2 }) },
   hunter: { body: std('#2e1065', { metalness: 0.5, roughness: 0.45 }), eye: new THREE.MeshStandardMaterial({ color: '#c084fc', emissive: '#c084fc', emissiveIntensity: 2.5 }) },
 };
-const mineGlow = { normal: color('#ef4444', 0.55), hunter: color('#a855f7', 0.7) };
+const mineGlow = { normal: color('#ef4444', 0.55), hunter: color('#a855f7', 0.7), titan: color('#f97316', 0.9) };
+
+// Titan-Mine: gleiche Grundform, dunkles Metall, glühende Ringe
+const titanMats = {
+  body: std('#27272a', { metalness: 0.75, roughness: 0.35 }),
+  eye: new THREE.MeshStandardMaterial({ color: '#fb923c', emissive: '#f97316', emissiveIntensity: 3 }),
+  ring: new THREE.MeshStandardMaterial({ color: '#f97316', emissive: '#ea580c', emissiveIntensity: 2.2, flatShading: true }),
+};
+const titanRingGeo = new THREE.TorusGeometry(1.15, 0.08, 6, 32);
 
 const powerGeo = {
   magnet: mergeGeometries([
@@ -256,6 +269,7 @@ let mode = 'normal';   // normal | daily
 let biomeKey = profile.biome;
 let settingsReturn = 'start';
 let touchUI = false;
+let lastResult = null;
 const game = {};
 const crystals = [];
 const mines = [];
@@ -272,6 +286,7 @@ let trailTimer = 0;
 const input = new Input({ onKey });
 
 function resetGame() {
+  if (game.titan) scene.remove(game.titan.mesh);
   Object.assign(game, {
     score: 0, timeLeft: C.GAME_TIME, shield: C.MAX_SHIELD, combo: 0, comboTimer: 0, bestCombo: 0,
     collected: 0, rare: 0, gold: 0, minesSmashed: 0, huntersSmashed: 0, powerupsTaken: 0,
@@ -279,7 +294,149 @@ function resetGame() {
     boostCd: 0, boostT: 0, mineTimer: 0, stormStarted: false, stormT: 0, stormSpawn: 0,
     powerupTimer: 7, buffs: { magnet: 0, double: 0 }, respawns: [],
     lavaTimer: 3, vents: [], onIce: false, coachT: 0, missions: [],
+    endless: false, titan: null, titanSpawned: false, titanNext: 0, titansDefeated: 0, stormNext: 0,
+    newAchievements: [],
   });
+}
+
+// Schwierigkeits-Fortschritt 0..1.6 – im Endlos-Modus gedeckelt, damit es fair bleibt
+const difficulty = () => Math.min(1.6, game.elapsed / C.GAME_TIME);
+
+function addShake(amount) {
+  if (settings.shake) shake = Math.max(shake, amount);
+}
+
+// --- Erfolge -------------------------------------------------------------------------
+const achievementQueue = [];
+let achievementShowing = false;
+
+function unlockAchievement(id) {
+  if (profile.achievements[id]) return;
+  profile.achievements[id] = Date.now();
+  saveProfile(profile);
+  const achievement = C.ACHIEVEMENTS.find((a) => a.id === id);
+  game.newAchievements?.push(achievement);
+  achievementQueue.push(achievement);
+  showNextAchievement();
+}
+
+function showNextAchievement() {
+  if (achievementShowing || !achievementQueue.length) return;
+  const a = achievementQueue.shift();
+  achievementShowing = true;
+  $('achievementIcon').textContent = a.icon;
+  $('achievementName').textContent = a.name;
+  $('achievementText').textContent = a.text;
+  restartAnimation($('achievementToast'), 'show');
+  audio.play('unlock', { volume: 0.8 });
+  if (!audio.currentVoice && state === 'playing') audio.voice('achievement');
+  setTimeout(() => {
+    achievementShowing = false;
+    showNextAchievement();
+  }, 3200);
+}
+
+// --- Titan-Mine (Boss) ---------------------------------------------------------------
+function spawnTitan() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(mineGeo, titanMats.body);
+  body.castShadow = true;
+  const ringA = new THREE.Mesh(titanRingGeo, titanMats.ring);
+  ringA.rotation.x = Math.PI / 2;
+  const ringB = new THREE.Mesh(titanRingGeo, titanMats.ring);
+  ringB.rotation.y = Math.PI / 2;
+  g.add(body, new THREE.Mesh(eyeGeo, titanMats.eye), ringA, ringB);
+  const { x, z } = freeSpot(14);
+  g.position.set(x, C.HOVER_Y + 0.6, z);
+  g.scale.setScalar(0.001);
+  scene.add(g);
+  game.titan = { mesh: g, rings: [ringA, ringB], hp: C.TITAN.hp, vx: 0, vz: 0, hitCd: 0, age: 0 };
+  audio.play('titanRoar');
+  audio.voice('titan');
+  announce('TITAN-MINE!', 'titan');
+  addShake(0.6);
+}
+
+function removeTitan() {
+  if (!game.titan) return;
+  scene.remove(game.titan.mesh);
+  game.titan = null;
+}
+
+function damageTitan() {
+  const T = game.titan;
+  T.hp--;
+  T.hitCd = 0.7;
+  _v.set(player.position.x - T.mesh.position.x, 0, player.position.z - T.mesh.position.z).normalize();
+  vel.copy(_v).multiplyScalar(15);
+  game.boostT = 0;
+  T.vx = -_v.x * 7;
+  T.vz = -_v.z * 7;
+  const pts = C.TITAN.hitPoints * addCombo();
+  game.score += pts;
+  particles.burst(T.mesh.position, COLORS.smash, 30, 10);
+  particles.burst(T.mesh.position, COLORS.smashLight, 14, 6);
+  audio.play('titanHit');
+  addShake(0.5);
+  vibrate(60);
+  popup(T.mesh.position, `+${pts}`, 'smash');
+  if (T.hp <= 0) defeatTitan();
+  else toast(`TITAN ${T.hp}/${C.TITAN.hp}`, 'smash');
+}
+
+function defeatTitan() {
+  const pos = game.titan.mesh.position.clone();
+  removeTitan();
+  for (let i = 0; i < 3; i++) particles.burst(pos, COLORS.lava[i], 34, 13);
+  audio.play('smash', { rate: 0.7 });
+  audio.voice('titanDown');
+  addShake(1);
+  vibrate(200);
+  const pts = C.TITAN.points * (game.buffs.double > 0 ? 2 : 1);
+  game.score += pts;
+  game.titansDefeated++;
+  if (game.shield < C.MAX_SHIELD) game.shield++;
+  announce(`TITAN BESIEGT! +${pts}`, 'storm');
+  for (let i = 0; i < C.TITAN.goldDrop; i++) {
+    const a = (i / C.TITAN.goldDrop) * Math.PI * 2;
+    spawnCrystal('gold', true, { x: pos.x + Math.cos(a) * 3, z: pos.z + Math.sin(a) * 3 });
+  }
+  unlockAchievement('titan');
+}
+
+function updateTitan(dt, t) {
+  const T = game.titan;
+  if (!T) return;
+  const m = T.mesh;
+  T.age += dt;
+  T.hitCd = Math.max(0, T.hitCd - dt);
+  m.scale.setScalar(Math.min(1, T.age * 1.2) * 2.4);
+  m.rotation.y += dt * 0.8;
+  T.rings[0].rotation.z += dt * 2;
+  T.rings[1].rotation.x += dt * 1.6;
+  titanMats.eye.emissiveIntensity = 2.5 + Math.sin(t * 8) * 1.5;
+  m.position.y = C.HOVER_Y + 0.6 + Math.sin(t * 1.8) * 0.3;
+  if (T.age < 1.2) return;
+
+  _v.set(player.position.x - m.position.x, 0, player.position.z - m.position.z);
+  const dist = _v.length();
+  const speed = C.TITAN.speed + (C.TITAN.hp - T.hp) * 0.25;
+  if (dist > 0.01) {
+    const steer = Math.min(1, 1.1 * dt);
+    T.vx += ((_v.x / dist) * speed - T.vx) * steer;
+    T.vz += ((_v.z / dist) * speed - T.vz) * steer;
+  }
+  m.position.x += T.vx * dt;
+  m.position.z += T.vz * dt;
+  const r = Math.hypot(m.position.x, m.position.z);
+  if (r > C.ARENA - 1) {
+    m.position.x *= (C.ARENA - 1) / r;
+    m.position.z *= (C.ARENA - 1) / r;
+  }
+  if (dist < C.TITAN.reach && T.hitCd === 0) {
+    if (game.boostT > 0) damageTitan();
+    else if (game.invuln === 0) hit(m.position.x, m.position.z, 'titan');
+  }
 }
 
 function freeSpot(minPlayerDist) {
@@ -296,11 +453,16 @@ function freeSpot(minPlayerDist) {
   return { x: rr(-C.ARENA, C.ARENA) * 0.6, z: rr(-C.ARENA, C.ARENA) * 0.6 };
 }
 
-function spawnCrystal(kind = null, falling = false) {
+function spawnCrystal(kind = null, falling = false, at = null) {
   if (crystals.length >= C.MAX_CRYSTALS) return;
   const type = kind || (rng() < 0.18 ? 'rare' : 'normal');
   const m = new THREE.Mesh(crystalGeo, crystalMats[type]);
-  const { x, z } = freeSpot(3);
+  let { x, z } = at || freeSpot(3);
+  const r = Math.hypot(x, z);
+  if (r > C.ARENA - 1) {
+    x *= (C.ARENA - 1) / r;
+    z *= (C.ARENA - 1) / r;
+  }
   m.position.set(x, falling ? rr(12, 18) : C.HOVER_Y, z);
   m.castShadow = true;
   m.scale.setScalar(falling ? 1 : 0.001);
@@ -329,10 +491,11 @@ function spawnMine(hunter = false) {
 }
 
 function pickPowerupType() {
-  const entries = Object.entries(C.POWERUPS).filter(([key]) => !(key === 'shield' && game.shield >= C.MAX_SHIELD));
-  let r = rng() * entries.reduce((sum, [, p]) => sum + p.weight, 0);
+  const weight = (key, p) => (key === 'shield' && game.endless ? C.ENDLESS.shieldWeight : p.weight);
+  const entries = Object.entries(C.POWERUPS).filter(([key]) => !(key === 'shield' && game.shield >= C.MAX_SHIELD) && !(key === 'time' && game.endless));
+  let r = rng() * entries.reduce((sum, [key, p]) => sum + weight(key, p), 0);
   for (const [key, p] of entries) {
-    r -= p.weight;
+    r -= weight(key, p);
     if (r <= 0) return key;
   }
   return entries[0][0];
@@ -368,6 +531,7 @@ function resetWorld() {
   crystals.length = 0;
   mines.length = 0;
   removePowerup();
+  removeTitan();
   particles.clear();
   player.position.set(0, C.HOVER_Y, 0);
   player.visible = true;
@@ -387,7 +551,7 @@ function setBiome(key) {
 // ---------------------------------------------------------------------------
 // Screens & HUD
 // ---------------------------------------------------------------------------
-const SCREENS = ['loading', 'start', 'pause', 'over', 'settings', 'hangar'];
+const SCREENS = ['loading', 'start', 'pause', 'over', 'settings', 'hangar', 'awards'];
 let opaqueScreen = true; // Lade- und Startbildschirm verdecken die 3D-Szene komplett → nicht rendern
 
 function showScreen(id) {
@@ -417,9 +581,10 @@ function setStyle(id, prop, value) {
 
 function updateHud() {
   setText('score', fmt(game.score));
-  const s = Math.ceil(game.timeLeft);
-  setText('time', `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
-  setFlag('timerPanel', 'urgent', game.timeLeft <= 10);
+  setText('time', game.endless ? clock(game.elapsed, false) : clock(game.timeLeft, true));
+  setFlag('timerPanel', 'urgent', !game.endless && game.timeLeft <= 10);
+  setFlag('bossBar', 'show', Boolean(game.titan));
+  if (game.titan) for (let i = 0; i < C.TITAN.hp; i++) setFlag(`bossPip${i}`, 'off', i >= game.titan.hp);
   for (let i = 0; i < C.MAX_SHIELD; i++) setFlag(`pip${i}`, 'off', i >= game.shield);
 
   const boostReady = 1 - game.boostCd / C.BOOST_COOLDOWN;
@@ -492,7 +657,7 @@ function flash() {
 }
 
 function vibrate(ms) {
-  if (touchUI && navigator.vibrate) navigator.vibrate(ms);
+  if (touchUI && settings.vibration && navigator.vibrate) navigator.vibrate(ms);
 }
 
 function updateSettingsUI() {
@@ -504,6 +669,8 @@ function updateSettingsUI() {
   $('tglMusic').setAttribute('aria-pressed', String(settings.music));
   $('tglSfx').setAttribute('aria-pressed', String(settings.sfx));
   $('tglFps').setAttribute('aria-pressed', String(settings.fps));
+  $('tglShake').setAttribute('aria-pressed', String(settings.shake));
+  $('tglVibe').setAttribute('aria-pressed', String(settings.vibration));
   $('fps').hidden = !settings.fps;
   $('qualityNote').textContent = settings.quality === 'auto'
     ? 'Auto senkt die Grafik von selbst, wenn das Spiel ruckelt.'
@@ -526,6 +693,23 @@ function renderStartScreen() {
   const dailyBest = profile.daily.date === date ? profile.daily.best : 0;
   const daily = C.BIOMES[dailyBiome(date)];
   $('dailyInfo').textContent = `${daily.icon} ${daily.name}${dailyBest ? ` · Heute: ${fmt(dailyBest)}` : ''}`;
+  const endlessBest = profile.endlessBest;
+  $('endlessInfo').textContent = endlessBest.time > 0
+    ? `Rekord ${clock(endlessBest.time)} · ${fmt(endlessBest.score)}`
+    : `${C.BIOMES[profile.biome].icon} ${C.BIOMES[profile.biome].name}`;
+  $('btnAwards').textContent = `🏆 ERFOLGE ${Object.keys(profile.achievements).length}/${C.ACHIEVEMENTS.length}`;
+}
+
+function renderAwards() {
+  const unlocked = Object.keys(profile.achievements).length;
+  $('awardsCount').textContent = `${unlocked} von ${C.ACHIEVEMENTS.length} freigeschaltet`;
+  $('awardList').innerHTML = C.ACHIEVEMENTS.map((a) => {
+    const at = profile.achievements[a.id];
+    return `<li class="award${at ? ' got' : ''}">
+      <span class="award-icon">${at ? a.icon : '🔒'}</span>
+      <span><b>${escapeHtml(a.name)}</b><small>${escapeHtml(a.text)}</small></span>
+    </li>`;
+  }).join('');
 }
 
 function renderHangar() {
@@ -558,6 +742,12 @@ function startGame(nextMode = 'normal') {
   biomeKey = key;
 
   resetGame();
+  game.endless = mode === 'endless';
+  if (game.endless) {
+    game.timeLeft = Infinity;
+    game.titanNext = C.TITAN.endlessFirst;
+    game.stormNext = C.ENDLESS.stormEvery;
+  }
   game.missions = pickMissions(rng);
   resetWorld();
   game.coachT = profile.seenTutorial ? 0 : 8;
@@ -565,10 +755,12 @@ function startGame(nextMode = 'normal') {
   domCache.clear();
   showScreen(null);
   $('hud').hidden = false;
-  setText('modeBadge', mode === 'daily' ? `📅 TAGES-CHALLENGE · ${C.BIOMES[key].name}` : `${C.BIOMES[key].icon} ${C.BIOMES[key].name}`);
+  const badge = { daily: '📅 TAGES-CHALLENGE · ', endless: '♾ ENDLOS · ', normal: `${C.BIOMES[key].icon} ` }[mode];
+  setText('modeBadge', `${badge}${C.BIOMES[key].name}`);
+  setText('timerLabel', game.endless ? 'ÜBERLEBT' : 'ZEIT');
   game.missions.forEach((m, i) => setText(`missionText${i}`, m.def.text));
   updateHud();
-  audio.voice(C.BIOMES[key].voice);
+  audio.voice(game.endless ? 'endless' : C.BIOMES[key].voice);
 }
 
 function endGame(reason) {
@@ -579,11 +771,20 @@ function endGame(reason) {
   const biomesBefore = C.BIOME_ORDER.filter((k) => isBiomeUnlocked(profile, k));
   const skinsBefore = C.SKINS.filter((s) => isSkinUnlocked(profile, s)).map((s) => s.id);
   profile.totalCrystals += game.collected;
+  profile.totalGold += game.gold;
   profile.games++;
   profile.seenTutorial = true;
 
   let isBest = false;
-  if (mode === 'daily') {
+  if (mode === 'endless') {
+    if (game.score > profile.endlessBest.score || game.elapsed > profile.endlessBest.time) {
+      isBest = game.score > profile.endlessBest.score;
+      profile.endlessBest = {
+        score: Math.max(game.score, profile.endlessBest.score),
+        time: Math.max(game.elapsed, profile.endlessBest.time),
+      };
+    }
+  } else if (mode === 'daily') {
     const date = todayKey();
     if (profile.daily.date !== date) profile.daily = { date, best: 0 };
     if (game.score > profile.daily.best) {
@@ -599,8 +800,19 @@ function endGame(reason) {
   saveProfile(profile);
 
   const rank = C.RANKS.find((r) => game.score >= r.min);
-  $('overMode').textContent = mode === 'daily' ? `📅 Tages-Challenge · ${C.BIOMES[biomeKey].name}` : `${C.BIOMES[biomeKey].icon} ${C.BIOMES[biomeKey].name}`;
-  $('overTitle').textContent = reason === 'time' ? 'ZEIT ABGELAUFEN!' : 'SCHILD ZERSTÖRT!';
+  unlockAchievement('first');
+  if (rank.rank === 'S') unlockAchievement('rankS');
+  if (isBiomeUnlocked(profile, 'frost')) unlockAchievement('frost');
+  if (isBiomeUnlocked(profile, 'volcano')) unlockAchievement('volcano');
+  if (profile.totalGold >= 10) unlockAchievement('gold10');
+  if (profile.totalCrystals >= 1000) unlockAchievement('crystals1000');
+  if (mode === 'endless' && game.elapsed >= 180) unlockAchievement('endless180');
+  if (mode === 'daily') unlockAchievement('daily');
+
+  lastResult = { score: game.score, rank: rank.rank, biome: C.BIOMES[biomeKey].name, mode, time: game.elapsed };
+  const modeLabel = { daily: '📅 Tages-Challenge · ', endless: '♾ Endlos-Modus · ', normal: `${C.BIOMES[biomeKey].icon} ` }[mode];
+  $('overMode').textContent = `${modeLabel}${C.BIOMES[biomeKey].name}`;
+  $('overTitle').textContent = mode === 'endless' ? `ÜBERLEBT: ${clock(game.elapsed)}` : reason === 'time' ? 'ZEIT ABGELAUFEN!' : 'SCHILD ZERSTÖRT!';
   $('overScore').textContent = `${fmt(game.score)} Punkte`;
   $('overRank').textContent = rank.rank;
   $('overRank').dataset.rank = rank.rank;
@@ -610,15 +822,17 @@ function endGame(reason) {
   $('stMines').textContent = String(game.minesSmashed);
   $('stPower').textContent = String(game.powerupsTaken);
   $('overBest').hidden = !isBest;
-  $('overBest').textContent = mode === 'daily' ? '★ NEUER TAGES-BESTWERT ★' : '★ NEUER BESTWERT ★';
+  $('overBest').textContent = { daily: '★ NEUER TAGES-BESTWERT ★', endless: '★ NEUER ENDLOS-REKORD ★', normal: '★ NEUER BESTWERT ★' }[mode];
   renderMissionList('overMissions');
   const unlocks = [
     ...newBiomes.map((k) => `🔓 ${C.BIOMES[k].icon} ${C.BIOMES[k].name} freigeschaltet!`),
     ...newSkins.map((s) => `🔓 Drohnen-Skin „${s.name}“ freigeschaltet!`),
+    ...game.newAchievements.map((a) => `🏆 Erfolg: ${a.icon} ${a.name}`),
   ];
   $('overUnlocks').innerHTML = unlocks.map((u) => `<li>${escapeHtml(u)}</li>`).join('');
   $('overUnlocks').hidden = unlocks.length === 0;
-  $('btnAgain').textContent = mode === 'daily' ? 'NOCHMAL (TAGES-CHALLENGE)' : 'NOCHMAL';
+  $('btnAgain').textContent = { daily: 'NOCHMAL (TAGES-CHALLENGE)', endless: 'NOCHMAL (ENDLOS)', normal: 'NOCHMAL' }[mode];
+  $('btnShare').textContent = '📤 TEILEN';
   showScreen('over');
 
   if (unlocks.length) audio.play('unlock');
@@ -684,6 +898,7 @@ function addCombo() {
   game.combo = game.comboTimer > 0 ? Math.min(game.combo + 1, 5) : 1;
   game.comboTimer = C.COMBO_WINDOW;
   game.bestCombo = Math.max(game.bestCombo, game.combo);
+  if (game.combo >= 5) unlockAchievement('combo5');
   return game.combo * (game.buffs.double > 0 ? 2 : 1);
 }
 
@@ -708,10 +923,11 @@ function smashMine(mine, index) {
   game.score += pts;
   game.minesSmashed++;
   if (hunter) game.huntersSmashed++;
+  if (game.minesSmashed >= 5) unlockAchievement('smash5');
   particles.burst(mine.position, COLORS.smash, 26, 9);
   particles.burst(mine.position, COLORS.smashLight, 12, 5);
   audio.play('smash');
-  shake = Math.max(shake, 0.35);
+  addShake(0.35);
   vibrate(40);
   popup(mine.position, `+${pts}`, 'smash');
   toast(hunter ? 'JÄGER ZERSTÖRT!' : 'MINE GERAMMT!', 'smash');
@@ -749,7 +965,7 @@ function hit(fromX, fromZ, source = 'mine') {
   _v.set(player.position.x - fromX, 0, player.position.z - fromZ);
   if (_v.lengthSq() < 0.001) _v.set(0, 0, 1);
   vel.addScaledVector(_v.normalize(), 16);
-  shake = 0.7;
+  addShake(0.7);
   flash();
   audio.play('hit');
   vibrate(120);
@@ -773,6 +989,7 @@ function updateMissions() {
       announce(`AUFTRAG ERFÜLLT! +${C.MISSION_BONUS}`, 'mission');
     }
   }
+  if (game.missions.length && game.missions.every((m) => m.done)) unlockAchievement('missions3');
 }
 
 // --- Gefahren: Lava-Geysire & Glatteis --------------------------------------------
@@ -803,7 +1020,7 @@ function erupt(vent) {
   }
   const dist = Math.hypot(player.position.x - vent.x, player.position.z - vent.z);
   audio.play('eruption', { volume: clamp(1.2 - dist / 25, 0.25, 1) });
-  if (dist < 8) shake = Math.max(shake, 0.4 * (1 - dist / 8) + 0.1);
+  if (dist < 8) addShake(0.4 * (1 - dist / 8) + 0.1);
   if (dist < vent.r && game.invuln === 0) hit(vent.x, vent.z, 'lava');
 }
 
@@ -812,7 +1029,7 @@ function updateHazards(dt) {
   if (hazard !== 'lava') return;
   game.lavaTimer -= dt;
   if (game.lavaTimer <= 0) {
-    game.lavaTimer = rr(...C.LAVA.every) * (1 - (game.elapsed / C.GAME_TIME) * 0.35);
+    game.lavaTimer = rr(...C.LAVA.every) * (1 - Math.min(1, difficulty()) * 0.35);
     spawnVent();
   }
   for (let i = game.vents.length - 1; i >= 0; i--) {
@@ -925,7 +1142,7 @@ function updateCrystals(dt, t) {
 function updateMines(dt, t, moving) {
   mineMats.normal.eye.emissiveIntensity = 1.6 + Math.sin(t * 6);
   mineMats.hunter.eye.emissiveIntensity = 2.2 + Math.sin(t * 9) * 1.2;
-  const wanderSpeed = 2 + (game.elapsed / C.GAME_TIME) * 2.5;
+  const wanderSpeed = 2 + difficulty() * 2.5;
   for (const m of mines) {
     const d = m.userData;
     d.age += dt;
@@ -940,7 +1157,7 @@ function updateMines(dt, t, moving) {
       _v.set(player.position.x - m.position.x, 0, player.position.z - m.position.z);
       const len = _v.length();
       if (len > 0.01) {
-        const hunterSpeed = 3.1 + (game.elapsed / C.GAME_TIME) * 1.2;
+        const hunterSpeed = 3.1 + difficulty() * 1.2;
         const steer = Math.min(1, 1.6 * dt);
         d.vx += ((_v.x / len) * hunterSpeed - d.vx) * steer;
         d.vz += ((_v.z / len) * hunterSpeed - d.vz) * steer;
@@ -979,19 +1196,21 @@ function updatePowerupVisual(dt, t) {
 
 function updateGame(dt, t) {
   game.elapsed += dt;
-  game.timeLeft -= dt;
   game.coachT = Math.max(0, game.coachT - dt);
   game.noHitTime += dt;
   game.noHitBest = Math.max(game.noHitBest, game.noHitTime);
-  if (!game.warned && game.timeLeft <= 10) {
-    game.warned = true;
-    audio.voice('warn');
-  }
-  if (game.timeLeft <= 0) {
-    game.timeLeft = 0;
-    updateHud();
-    endGame('time');
-    return;
+  if (!game.endless) {
+    game.timeLeft -= dt;
+    if (!game.warned && game.timeLeft <= 10) {
+      game.warned = true;
+      audio.voice('warn');
+    }
+    if (game.timeLeft <= 0) {
+      game.timeLeft = 0;
+      updateHud();
+      endGame('time');
+      return;
+    }
   }
 
   game.buffs.magnet = Math.max(0, game.buffs.magnet - dt);
@@ -1002,9 +1221,11 @@ function updateGame(dt, t) {
   game.comboTimer = Math.max(0, game.comboTimer - dt);
   if (game.comboTimer === 0) game.combo = 0;
 
-  // Kristallsturm zur Halbzeit
-  if (!game.stormStarted && game.timeLeft <= C.STORM_AT) {
+  // Kristallsturm: zur Halbzeit bzw. im Endlos-Modus regelmäßig
+  const stormDue = game.endless ? game.elapsed >= game.stormNext : !game.stormStarted && game.timeLeft <= C.STORM_AT;
+  if (stormDue) {
     game.stormStarted = true;
+    game.stormNext += C.ENDLESS.stormEvery;
     game.stormT = C.STORM_DURATION;
     audio.voice('storm');
     announce('KRISTALLSTURM!', 'storm');
@@ -1053,7 +1274,9 @@ function updateGame(dt, t) {
   // Minen: Nachschub, Jäger, Respawns
   game.mineTimer += dt;
   const normalMines = mines.filter((m) => !m.userData.hunter).length + game.respawns.filter((r) => !r.hunter).length;
-  if (game.mineTimer >= 10 && normalMines < C.MAX_MINES) {
+  const mineEvery = game.endless ? C.ENDLESS.mineEvery : 10;
+  const maxMines = game.endless ? C.ENDLESS.maxMines : C.MAX_MINES;
+  if (game.mineTimer >= mineEvery && normalMines < maxMines) {
     game.mineTimer = 0;
     spawnMine();
   }
@@ -1084,6 +1307,19 @@ function updateGame(dt, t) {
     }
   }
 
+  // Titan-Mine: Vulkaninsel kurz vor Schluss, Endlos-Modus regelmäßig
+  if (!game.titan) {
+    if (game.endless && game.elapsed >= game.titanNext) {
+      game.titanNext = game.elapsed + C.TITAN.endlessEvery;
+      spawnTitan();
+    } else if (!game.endless && C.BIOMES[biomeKey].titan && !game.titanSpawned && game.timeLeft <= C.TITAN.normalAt) {
+      game.titanSpawned = true;
+      spawnTitan();
+    }
+  }
+  updateTitan(dt, t);
+  if (state !== 'playing') return;
+
   updateHazards(dt);
   if (state !== 'playing') return;
   updateMissions();
@@ -1095,6 +1331,7 @@ function updateGlows(t) {
   for (const c of crystals) glow.add(c.position.x, c.position.z, c.userData.falling ? 1.2 : 2.3, crystalGlow[c.userData.type]);
   for (const m of mines) glow.add(m.position.x, m.position.z, m.userData.hunter ? 3.2 : 2.4, mineGlow[m.userData.hunter ? 'hunter' : 'normal']);
   if (powerup) glow.add(powerup.position.x, powerup.position.z, 3.2, powerGlow[powerup.userData.type]);
+  if (game.titan) glow.add(game.titan.mesh.position.x, game.titan.mesh.position.z, 7 + Math.sin(t * 6) * 0.6, mineGlow.titan);
   for (const v of game.vents ?? []) {
     const progress = 1 - v.t / C.LAVA.warn;
     _glowColor.copy(COLORS.lavaWarn).multiplyScalar(0.5 + progress * 0.8 + Math.sin(t * 30) * 0.15 * progress);
@@ -1254,6 +1491,7 @@ function onKey(e) {
   if (e.code === 'KeyP' || e.code === 'Escape') {
     if (!$('settings').hidden) closeSettings();
     else if (state === 'hangar') closeHangar();
+    else if (!$('awards').hidden) closeAwards();
     else togglePause();
   }
   if (e.code === 'KeyM') {
@@ -1291,6 +1529,7 @@ function onPad(button) {
   } else if (button === 'b') {
     if (screenId === 'settings') closeSettings();
     else if (screenId === 'hangar') closeHangar();
+    else if (screenId === 'awards') closeAwards();
     else if (screenId === 'pause') togglePause();
     else if (screenId === 'over') toMenu();
   } else if (button === 'start') {
@@ -1335,6 +1574,52 @@ $('btnSettingsPause').addEventListener('click', openSettings);
 $('btnSettingsBack').addEventListener('click', closeSettings);
 $('btnHangar').addEventListener('click', openHangar);
 $('btnHangarBack').addEventListener('click', closeHangar);
+$('btnEndless').addEventListener('click', () => startGame('endless'));
+$('btnAwards').addEventListener('click', () => {
+  renderAwards();
+  showScreen('awards');
+});
+$('btnAwardsBack').addEventListener('click', closeAwards);
+$('btnShare').addEventListener('click', shareResult);
+$('tglShake').addEventListener('click', () => {
+  settings.shake = !settings.shake;
+  saveSettings();
+  updateSettingsUI();
+});
+$('tglVibe').addEventListener('click', () => {
+  settings.vibration = !settings.vibration;
+  saveSettings();
+  updateSettingsUI();
+});
+
+function closeAwards() {
+  renderStartScreen();
+  showScreen('start');
+}
+
+async function shareResult() {
+  if (!lastResult) return;
+  const url = window.location.href.split(/[?#]/)[0];
+  const where = lastResult.mode === 'daily' ? `in der Tages-Challenge (${lastResult.biome})`
+    : lastResult.mode === 'endless' ? `im Endlos-Modus (${clock(lastResult.time)} überlebt)`
+      : `auf der ${lastResult.biome}`;
+  const text = `💎 ${fmt(lastResult.score)} Punkte (Rang ${lastResult.rank}) ${where} in Kristalljäger! Schaffst du mehr?`;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'Kristalljäger', text, url });
+      return;
+    }
+  } catch (e) {
+    if (e?.name === 'AbortError') return;
+  }
+  try {
+    await navigator.clipboard.writeText(`${text} ${url}`);
+    $('btnShare').textContent = '✓ KOPIERT';
+  } catch {
+    $('btnShare').textContent = 'TEILEN NICHT MÖGLICH';
+  }
+  setTimeout(() => { $('btnShare').textContent = '📤 TEILEN'; }, 2200);
+}
 
 $('biomeCards').addEventListener('click', (e) => {
   const card = e.target.closest('.biome-card');
@@ -1459,6 +1744,14 @@ window.__kj = {
   debugAddCrystals: (n) => { profile.totalCrystals += n; saveProfile(profile); },
   debugSetBest: (biome, score) => { profile.bestByBiome[biome] = score; saveProfile(profile); renderStartScreen(); },
   debugPad: (button) => onPad(button),
+  debugSpawnTitan: () => spawnTitan(),
+  debugMoveToTitan: () => {
+    const T = game.titan;
+    if (T) player.position.set(T.mesh.position.x + 1, player.position.y, T.mesh.position.z + 1);
+  },
+  debugShieldMax: () => { game.shield = C.MAX_SHIELD; game.invuln = 0; },
+  titanHp: () => game.titan?.hp ?? null,
+  lastShareText: () => lastResult,
 };
 
 // ---------------------------------------------------------------------------
