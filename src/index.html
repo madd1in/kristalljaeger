@@ -4,12 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#130a2e">
-  <meta name="description" content="Kristalljäger – 3D-Arcade im Browser: Kristalle sammeln, Minen rammen, Power-ups schnappen.">
+  <meta name="description" content="Kristalljäger – 3D-Arcade im Browser: drei Welten, Aufträge, Tages-Challenge, Power-ups und Drohnen-Skins.">
   <title>Kristalljäger</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💎</text></svg>">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -20,7 +24,8 @@
   <!-- HUD – Layout aus Figma "Kristalljäger – HUD & UI" -->
   <div id="hud" hidden>
     <div class="panel score"><span class="label">PUNKTE</span><span id="score" class="value">0</span></div>
-    <div id="buffs">
+    <div id="leftStack">
+      <div id="missionChip" class="chip">🎯 0/3</div>
       <div class="buff magnet" id="buff-magnet"><span>🧲</span><i><b id="buffFill-magnet"></b></i></div>
       <div class="buff double" id="buff-double"><span>✖2</span><i><b id="buffFill-double"></b></i></div>
     </div>
@@ -32,10 +37,22 @@
       <div class="boost" title="Boost"><div id="boostFill"></div></div>
     </div>
     <button id="btnPauseHud" class="icon-btn" aria-label="Pause">❚❚</button>
+    <div id="missions">
+      <div id="modeBadge" class="mode-label"></div>
+      <ul>
+        <li id="mission0"><span id="missionText0"></span><b id="missionVal0"></b></li>
+        <li id="mission1"><span id="missionText1"></span><b id="missionVal1"></b></li>
+        <li id="mission2"><span id="missionText2"></span><b id="missionVal2"></b></li>
+      </ul>
+    </div>
+    <div id="coach">
+      <span class="keys-only">💎 Kristalle einsammeln · 💣 Minen ausweichen · 🚀 Leertaste: Boost rammt Minen</span>
+      <span class="touch-only">💎 Sammeln · 💣 Ausweichen · 🚀 BOOST rammt Minen</span>
+    </div>
     <div id="toast"></div>
     <div id="announce"></div>
     <div id="popups"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
-    <div class="hint keys-only">WASD / Pfeile: fliegen &nbsp;·&nbsp; Leertaste: Boost (rammt Minen!) &nbsp;·&nbsp; P: Pause &nbsp;·&nbsp; M: Ton</div>
+    <div class="hint keys-only">WASD / Pfeile: fliegen &nbsp;·&nbsp; Leertaste: Boost &nbsp;·&nbsp; P: Pause &nbsp;·&nbsp; M: Ton</div>
   </div>
 
   <div id="touch" hidden>
@@ -56,26 +73,36 @@
   </section>
 
   <section id="start" class="screen" hidden>
-    <h1 class="sr">Kristalljäger</h1>
+    <h1 class="hero-logo">KRISTALL<span>JÄGER</span></h1>
     <div class="content">
-      <ul class="howto">
-        <li><b>💎</b>Kristalle sammeln – schnell hintereinander gibt Kombos</li>
-        <li><b>💣</b>Minen ausweichen – oder mit Boost rammen</li>
-        <li><b>⚡</b>Power-ups: Magnet, Punkte x2, +5 Sekunden, Schild</li>
-      </ul>
-      <p class="sub keys-only">WASD / Pfeile: fliegen · Leertaste: Boost</p>
-      <p class="sub touch-only">Links ziehen: fliegen · Rechts tippen: Boost</p>
+      <div id="biomeCards" class="biomes"></div>
       <div class="row">
-        <button id="btnStart" class="btn primary" disabled>SPIEL STARTEN</button>
-        <button id="btnSettingsStart" class="btn ghost">⚙ EINSTELLUNGEN</button>
+        <button id="btnStart" class="btn primary">▶ SPIELEN</button>
+        <button id="btnDaily" class="btn daily">📅 TAGES-CHALLENGE<small id="dailyInfo"></small></button>
       </div>
-      <p id="bestStart" class="best" hidden></p>
+      <div class="row">
+        <button id="btnHangar" class="btn ghost">🛸 HANGAR</button>
+        <button id="btnSettingsStart" class="btn ghost">⚙ EINSTELLUNGEN</button>
+        <button id="btnInstall" class="btn ghost" hidden>📲 APP INSTALLIEREN</button>
+      </div>
+      <p class="sub keys-only">WASD / Pfeile / 🎮: fliegen · Leertaste / A: Boost</p>
+      <p class="sub touch-only">Links ziehen: fliegen · Rechts tippen: Boost</p>
+    </div>
+  </section>
+
+  <section id="hangar" class="screen" hidden>
+    <div class="card hangar">
+      <h2>HANGAR</h2>
+      <p class="stats">Kristalle insgesamt: <b id="totalCrystals">0</b> 💎</p>
+      <div id="skinList" class="skins"></div>
+      <button id="btnHangarBack" class="btn primary">FERTIG</button>
     </div>
   </section>
 
   <section id="pause" class="screen" hidden>
     <div class="card">
       <h2>PAUSE</h2>
+      <ul id="pauseMissions" class="mission-list"></ul>
       <div class="col">
         <button id="btnResume" class="btn primary">WEITER</button>
         <button id="btnRestart" class="btn ghost">NEUSTART</button>
@@ -107,6 +134,7 @@
 
   <section id="over" class="screen" hidden>
     <div class="card result">
+      <div id="overMode" class="mode-label"></div>
       <h2 id="overTitle">ZEIT ABGELAUFEN!</h2>
       <div class="rank-row">
         <div id="overRank" class="rank">B</div>
@@ -116,12 +144,14 @@
         </div>
       </div>
       <div id="overBest" class="newbest" hidden>★ NEUER BESTWERT ★</div>
+      <ul id="overUnlocks" class="unlocks" hidden></ul>
       <dl class="statgrid">
         <div><dt>Kristalle</dt><dd id="stCrystals">0</dd></div>
         <div><dt>Beste Kombo</dt><dd id="stCombo">x1</dd></div>
         <div><dt>Minen gerammt</dt><dd id="stMines">0</dd></div>
         <div><dt>Power-ups</dt><dd id="stPower">0</dd></div>
       </dl>
+      <ul id="overMissions" class="mission-list"></ul>
       <div class="row">
         <button id="btnAgain" class="btn primary">NOCHMAL</button>
         <button id="btnMenu" class="btn ghost">MENÜ</button>

@@ -1,11 +1,16 @@
-// Tastatur + virtueller Joystick. Liefert einen analogen Bewegungsvektor (Länge 0..1).
+// Tastatur, virtueller Joystick und Gamepad. Liefert einen analogen Bewegungsvektor (Länge 0..1).
 
 const DEADZONE = 0.12;
+const PAD_DEADZONE = 0.2;
+// Standard-Mapping (Xbox/PlayStation): A/Kreuz, B/Kreis, LB, RB, LT, RT, Start, Steuerkreuz
+const PAD_BUTTONS = { a: 0, b: 1, lb: 4, rb: 5, rt: 7, start: 9, up: 12, down: 13, left: 14, right: 15 };
 
 export class Input {
   constructor({ onKey }) {
     this.keys = new Set();
     this.joy = { x: 0, y: 0 };
+    this.pad = { x: 0, y: 0, connected: false };
+    this.padPrev = {};
     this.boostQueued = false;
 
     window.addEventListener('keydown', (e) => {
@@ -78,6 +83,34 @@ export class Input {
     boost.addEventListener('pointerleave', release);
   }
 
+  // Einmal pro Frame aufrufen; onButton bekommt neu gedrückte Tasten ('a', 'start', 'up', …)
+  pollGamepad(onButton) {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const pad = [...pads].find((p) => p && p.connected);
+    this.pad.connected = Boolean(pad);
+    if (!pad) {
+      this.pad.x = 0;
+      this.pad.y = 0;
+      this.padPrev = {};
+      return;
+    }
+    const pressed = {};
+    for (const [name, index] of Object.entries(PAD_BUTTONS)) pressed[name] = Boolean(pad.buttons[index]?.pressed);
+    const axis = (v) => (Math.abs(v) < PAD_DEADZONE ? 0 : v);
+    let x = axis(pad.axes[0] || 0);
+    let y = axis(pad.axes[1] || 0);
+    if (pressed.left) x = -1;
+    if (pressed.right) x = 1;
+    if (pressed.up) y = -1;
+    if (pressed.down) y = 1;
+    this.pad.x = x;
+    this.pad.y = y;
+    for (const name of Object.keys(PAD_BUTTONS)) {
+      if (pressed[name] && !this.padPrev[name]) onButton(name);
+    }
+    this.padPrev = pressed;
+  }
+
   move(out) {
     const k = this.keys;
     let x = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
@@ -93,6 +126,8 @@ export class Input {
       x += this.joy.x * scale;
       z += this.joy.y * scale;
     }
+    x += this.pad.x;
+    z += this.pad.y;
     const len = Math.hypot(x, z);
     if (len > 1) {
       x /= len;

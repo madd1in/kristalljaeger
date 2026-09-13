@@ -80,6 +80,42 @@ export class AudioManager {
     }
   }
 
+  // Dauerschleife (z. B. Triebwerk) mit regelbarer Lautstärke und Tonhöhe
+  loop(name) {
+    const buffer = this.buffers.get(name);
+    if (buffer) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0;
+      src.connect(gain).connect(this.sfxGain);
+      src.start();
+      return {
+        set: (volume, rate) => {
+          const t = this.ctx.currentTime;
+          gain.gain.setTargetAtTime(this.sfxOn ? volume : 0, t, 0.08);
+          src.playbackRate.setTargetAtTime(rate, t, 0.08);
+        },
+      };
+    }
+    const el = this.elements.get(name);
+    if (!el) return { set: () => {} };
+    el.loop = true;
+    el.volume = 0;
+    let playing = false;
+    return {
+      set: (volume, rate) => {
+        el.volume = Math.min(1, this.sfxOn && !this.muted ? volume : 0);
+        el.playbackRate = rate;
+        if (volume > 0 && !playing) {
+          playing = true;
+          el.play().catch(() => { playing = false; });
+        }
+      },
+    };
+  }
+
   voice(name) {
     if (this.muted) return;
     this.stopVoice();

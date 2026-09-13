@@ -1,48 +1,60 @@
 # 💎 Kristalljäger
 
-Kleines 3D-Arcade-Spiel für den Browser (Desktop & Handy). Du steuerst eine Drohne über eine schwebende Low-Poly-Insel, sammelst in 60 Sekunden so viele Kristalle wie möglich und weichst Minen aus – oder rammst sie mit dem Boost.
+3D-Arcade-Spiel für den Browser (Desktop, Handy, Controller). Du steuerst eine Drohne über schwebende Low-Poly-Inseln, sammelst in 60 Sekunden so viele Kristalle wie möglich, erfüllst Aufträge und rammst Minen mit dem Boost.
 
-**▶ Spielen:** https://madd1in.github.io/kristalljaeger/
+**▶ Spielen:** https://madd1in.github.io/kristalljaeger/ – lässt sich auch als App installieren und offline spielen.
 
 ## Steuerung
 
-| | Desktop | Handy / Tablet |
-|---|---|---|
-| Fliegen | WASD / Pfeiltasten | Links auf dem Bildschirm ziehen (Joystick) |
-| Boost (rammt Minen) | Leertaste | BOOST-Button rechts |
-| Pause | P / Esc | ❚❚-Button |
-| Ton an/aus | M | Einstellungen |
-| FPS-Anzeige | F | Einstellungen |
+| | Tastatur | Handy / Tablet | Controller |
+|---|---|---|---|
+| Fliegen | WASD / Pfeiltasten | Links ziehen (Joystick) | Linker Stick / Steuerkreuz |
+| Boost (rammt Minen) | Leertaste | BOOST-Button | A / RT / RB |
+| Pause | P / Esc | ❚❚-Button | Start |
+| Menüs | Maus | Tippen | Steuerkreuz + A, B = zurück |
+| Ton an/aus | M | Einstellungen | – |
+| FPS-Anzeige | F | Einstellungen | – |
 
 ## Features
 
-- **Kombos:** Kristalle schnell hintereinander sammeln → bis zu x5 Punkte
-- **Kristallarten:** Türkis (10), Pink (30), Gold (50, nur im Kristallsturm)
+- **3 Welten** mit eigener Gefahr
+  - 🌿 **Wieseninsel** – der Einstieg
+  - ❄️ **Frostinsel** – Glatteis-Flächen, auf denen die Drohne rutscht (freigeschaltet ab 700 Punkten auf der Wiese)
+  - 🌋 **Vulkaninsel** – Lava-Geysire mit Vorwarnung (freigeschaltet ab 700 Punkten auf Frost)
+- **Aufträge:** 3 zufällige pro Runde (z. B. „Ramme 3 Minen“, „Kombo x5“), je +100 Punkte
+- **📅 Tages-Challenge:** jeden Tag dieselbe Welt, dieselben Aufträge und Spawns für alle – eigener Tages-Bestwert
+- **🛸 Hangar:** 5 Drohnen-Skins, freigeschaltet über insgesamt gesammelte Kristalle
+- **Kombos** bis x5, Kristallarten Türkis (10) / Pink (30) / Gold (50)
 - **Power-ups:** 🧲 Magnet · ✖2 Punkte · ⏱ +5 Sekunden · 🛡 Schild
-- **Boost-Rammen:** Minen während des Boosts zerstören (+25, Jäger-Mine +60)
-- **Kristallsturm** zur Halbzeit: Kristalle regnen vom Himmel
-- **Jäger-Mine** ab Sekunde 25: verfolgt die Drohne
-- **Rang S–D**, Statistiken und lokaler Bestwert
-- **Grafikstufen** Auto / Hoch / Mittel / Niedrig – Auto regelt bei Rucklern automatisch herunter
-- Ladebalken, Hintergrundmusik, Soundeffekte und deutsche Sprachansagen
+- **Kristallsturm** zur Halbzeit, **Jäger-Mine** ab Sekunde 25, **Rang S–D**
+- **Grafikstufen** Auto / Hoch / Mittel / Niedrig (Auto regelt bei Rucklern herunter), Bloom auf „Hoch“
+- Ladebalken, Hintergrundmusik, Triebwerksgeräusch, Soundeffekte, deutsche Sprachansagen
+- **PWA:** installierbar, Offline-Cache per Service Worker
 
 ## Technik
 
-- [three.js](https://threejs.org/) (r186), gebündelt mit esbuild in **eine** `index.html` – startet auch offline und per Doppelklick
-- Performance: instanzierte Deko (Bäume, Gras, Wolken), verschmolzene Minen-Geometrie, Partikel- und Glow-Pools → wenige Draw Calls; Bloom nur auf „Hoch“
+- [three.js](https://threejs.org/) r186, mit esbuild zu **einer** `index.html` gebündelt (startet auch per Doppelklick)
+- Performance: instanzierte Deko, verschmolzene Minen-Geometrie, Partikel- und Glow-Pools, automatische Grafikstufen
 - Audio über WebAudio (Fallback auf `<audio>` unter `file://`)
+- Fortschritt (Bestwerte, Kristalle, Skins) lokal im Browser gespeichert
 
 ### Entwickeln
 
 ```bash
 npm install
-npm run build      # erzeugt index.html aus src/
+npm run build      # erzeugt index.html und sw.js aus src/
 ```
 
-Quellcode liegt in `src/` (`game.js`, `world.js`, `audio.js`, `input.js`, `config.js`, `index.html`), Styles in `style.css`, Assets in `assets/`.
+| Datei | Inhalt |
+|---|---|
+| `src/game.js` | Spielablauf, HUD, Menüs, Kamera |
+| `src/world.js` | Welten, Himmel, Deko, Partikel |
+| `src/config.js` | Balance, Welten, Skins, Aufträge, Grafikstufen |
+| `src/progress.js` | Profil, Freischaltungen, Tages-Challenge |
+| `src/audio.js` / `src/input.js` | Sound / Tastatur, Touch, Gamepad |
 
 ## Credits
 
-- Musik, Soundeffekte, Sprachansagen und Titelbild: generiert mit ElevenLabs
+- Musik, Soundeffekte, Sprachansagen, Titelbild und App-Icon: generiert mit ElevenLabs
 - HUD/UI-Entwürfe: Figma
 - Code: erstellt mit Claude Code

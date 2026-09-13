@@ -8,31 +8,28 @@ import * as C from './config.js';
 import { AudioManager } from './audio.js';
 import { Input } from './input.js';
 import { createWorld, GlowLayer, Particles, rand } from './world.js';
+import {
+  dailyBiome, hashString, isBiomeUnlocked, isSkinUnlocked, loadProfile, mulberry32, pickMissions,
+  readStorage, saveProfile, todayKey, writeStorage,
+} from './progress.js';
 
 // ---------------------------------------------------------------------------
-// Helfer & Einstellungen
+// Helfer, Einstellungen, Profil
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const fmt = (n) => Math.round(n).toLocaleString('de-DE').replace(/\./g, ' ');
 const color = (hex, scale = 1) => new THREE.Color(hex).multiplyScalar(scale);
-
-function readStorage(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw === null ? fallback : JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-}
-function writeStorage(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* Speicher nicht verfügbar */ }
-}
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 
 const settings = { quality: 'auto', music: true, sfx: true, fps: false, ...readStorage(C.STORAGE_KEYS.settings, {}) };
 const saveSettings = () => writeStorage(C.STORAGE_KEYS.settings, settings);
-let best = Number(readStorage(C.STORAGE_KEYS.best, 0)) || 0;
+const profile = loadProfile();
+
+// Spiel-Zufall: normal Math.random, in der Tages-Challenge ein Seed-Generator
+let rng = Math.random;
+const rr = (a, b) => a + rng() * (b - a);
 
 // ---------------------------------------------------------------------------
 // Renderer, Welt, Kamera
@@ -55,9 +52,19 @@ const particles = new Particles(scene);
 const audio = new AudioManager();
 audio.setMusicOn(settings.music);
 audio.setSfxOn(settings.sfx);
+let engine = null;
 
 let composer = null;
+let bloomPass = null;
 let quality = 'high';
+
+// Welt wechseln inkl. Belichtung/Bloom-Schwelle (Schnee würde sonst überstrahlen)
+function switchWorld(key) {
+  const b = C.BIOMES[key];
+  world.setBiome(key);
+  renderer.toneMappingExposure = b.exposure;
+  if (bloomPass) bloomPass.threshold = b.bloomThreshold;
+}
 
 function applyQuality(name) {
   quality = name;
@@ -83,7 +90,8 @@ function applyQuality(name) {
   if (q.bloom && !composer) {
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.4, 0.55));
+    bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.4, C.BIOMES[world.biome?.key ?? 'meadow'].bloomThreshold);
+    composer.addPass(bloomPass);
     composer.addPass(new OutputPass());
   }
   if (composer) {
@@ -108,42 +116,67 @@ function resize() {
 }
 
 // ---------------------------------------------------------------------------
-// Spieler-Drohne
+// Spieler-Drohne (Materialien je Skin austauschbar)
 // ---------------------------------------------------------------------------
 const std = (hex, extra = {}) => new THREE.MeshStandardMaterial({ color: hex, flatShading: true, roughness: 0.4, ...extra });
+
+const droneBody = std('#6b6580', { metalness: 0.6, roughness: 0.35 });
+const droneGlow = new THREE.MeshStandardMaterial({ color: '#5eead4', emissive: '#5eead4', emissiveIntensity: 2.4, flatShading: true });
+const thrusterMat = new THREE.MeshBasicMaterial({ color: '#99f6e4', transparent: true, opacity: 0.85, toneMapped: false });
 
 const player = new THREE.Group();
 const tilt = new THREE.Group();
 player.add(tilt);
 {
-  const body = std('#6b6580', { metalness: 0.6, roughness: 0.35 });
-  const glowMat = new THREE.MeshStandardMaterial({ color: '#5eead4', emissive: '#5eead4', emissiveIntensity: 2.4, flatShading: true });
-  tilt.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.6, 0), body));
-  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8), glowMat);
+  tilt.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.6, 0), droneBody));
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8), droneGlow);
   eye.position.set(0, 0.05, -0.5);
-  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.5, 4), body);
+  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.5, 4), droneBody);
   antenna.position.set(0.15, 0.7, 0.1);
-  const antennaTip = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 4), glowMat);
+  const antennaTip = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 4), droneGlow);
   antennaTip.position.set(0.15, 0.97, 0.1);
   tilt.add(eye, antenna, antennaTip);
   for (const side of [-1, 1]) {
-    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.1, 0.45), body);
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.1, 0.45), droneBody);
     wing.position.set(side * 0.85, 0, 0.05);
     wing.rotation.z = side * -0.15;
-    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.13, 0.13), glowMat);
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.13, 0.13), droneGlow);
     tip.position.set(side * 1.25, -0.06, 0.2);
     tilt.add(wing, tip);
   }
   tilt.traverse((o) => { if (o.isMesh) o.castShadow = true; });
 }
-const thruster = new THREE.Mesh(
-  new THREE.ConeGeometry(0.2, 1, 8),
-  new THREE.MeshBasicMaterial({ color: '#99f6e4', transparent: true, opacity: 0.85, toneMapped: false })
-);
+const thruster = new THREE.Mesh(new THREE.ConeGeometry(0.2, 1, 8), thrusterMat);
 thruster.rotation.x = Math.PI / 2;
 tilt.add(thruster);
 tilt.scale.setScalar(1.35);
 scene.add(player);
+
+const COLORS = {
+  hit: color('#fb7185'),
+  smash: color('#f97316'),
+  smashLight: color('#fecaca'),
+  ember: color('#fb923c'),
+  lava: [color('#f97316'), color('#ef4444'), color('#fde047')],
+  lavaWarn: color('#ef4444', 0.9),
+  ice: color('#e0f2fe'),
+  boost: color('#5eead4'),
+  trail: color('#99f6e4', 0.8),
+  playerGlow: color('#5eead4', 0.55),
+  magnetGlow: color('#f87171', 0.7),
+  doubleGlow: color('#a78bfa', 0.7),
+};
+
+function applySkin(id) {
+  const skin = C.SKINS.find((s) => s.id === id) || C.SKINS[0];
+  droneBody.color.set(skin.body);
+  droneGlow.color.set(skin.glow);
+  droneGlow.emissive.set(skin.glow);
+  thrusterMat.color.set(skin.glow).lerp(new THREE.Color('#ffffff'), 0.45);
+  COLORS.boost.set(skin.glow);
+  COLORS.trail.set(skin.glow).multiplyScalar(0.8);
+  COLORS.playerGlow.set(skin.glow).multiplyScalar(0.55);
+}
 
 // ---------------------------------------------------------------------------
 // Kristalle, Minen, Power-ups – Geometrien & Materialien
@@ -215,21 +248,12 @@ for (const [key, p] of Object.entries(C.POWERUPS)) {
   powerGlow[key] = color(p.color, 0.8);
 }
 
-const COLORS = {
-  hit: color('#fb7185'),
-  smash: color('#f97316'),
-  smashDark: color('#fecaca'),
-  boost: color('#5eead4'),
-  trail: color('#99f6e4', 0.8),
-  playerGlow: color('#5eead4', 0.55),
-  magnetGlow: color('#f87171', 0.7),
-  doubleGlow: color('#a78bfa', 0.7),
-};
-
 // ---------------------------------------------------------------------------
 // Spielzustand
 // ---------------------------------------------------------------------------
-let state = 'loading'; // loading | menu | playing | paused | over
+let state = 'loading'; // loading | menu | hangar | playing | paused | over
+let mode = 'normal';   // normal | daily
+let biomeKey = profile.biome;
 let settingsReturn = 'start';
 let touchUI = false;
 const game = {};
@@ -240,6 +264,7 @@ const vel = new THREE.Vector3();
 const moveDir = new THREE.Vector3();
 const _v = new THREE.Vector3();
 const _proj = new THREE.Vector3();
+const _glowColor = new THREE.Color();
 let yaw = 0;
 let shake = 0;
 let trailTimer = 0;
@@ -249,16 +274,18 @@ const input = new Input({ onKey });
 function resetGame() {
   Object.assign(game, {
     score: 0, timeLeft: C.GAME_TIME, shield: C.MAX_SHIELD, combo: 0, comboTimer: 0, bestCombo: 0,
-    collected: 0, minesSmashed: 0, powerupsTaken: 0, invuln: 0, elapsed: 0, warned: false,
+    collected: 0, rare: 0, gold: 0, minesSmashed: 0, huntersSmashed: 0, powerupsTaken: 0,
+    noHitTime: 0, noHitBest: 0, invuln: 0, elapsed: 0, warned: false,
     boostCd: 0, boostT: 0, mineTimer: 0, stormStarted: false, stormT: 0, stormSpawn: 0,
     powerupTimer: 7, buffs: { magnet: 0, double: 0 }, respawns: [],
+    lavaTimer: 3, vents: [], onIce: false, coachT: 0, missions: [],
   });
 }
 
 function freeSpot(minPlayerDist) {
   for (let tries = 0; tries < 40; tries++) {
-    const a = rand(0, Math.PI * 2);
-    const r = Math.sqrt(Math.random()) * (C.ARENA - 1.5);
+    const a = rr(0, Math.PI * 2);
+    const r = Math.sqrt(rng()) * (C.ARENA - 1.5);
     const x = Math.cos(a) * r;
     const z = Math.sin(a) * r;
     if (Math.hypot(x - player.position.x, z - player.position.z) < minPlayerDist) continue;
@@ -266,15 +293,15 @@ function freeSpot(minPlayerDist) {
     if (crystals.some((c) => Math.hypot(x - c.position.x, z - c.position.z) < 1.6)) continue;
     return { x, z };
   }
-  return { x: rand(-C.ARENA, C.ARENA) * 0.6, z: rand(-C.ARENA, C.ARENA) * 0.6 };
+  return { x: rr(-C.ARENA, C.ARENA) * 0.6, z: rr(-C.ARENA, C.ARENA) * 0.6 };
 }
 
 function spawnCrystal(kind = null, falling = false) {
   if (crystals.length >= C.MAX_CRYSTALS) return;
-  const type = kind || (Math.random() < 0.18 ? 'rare' : 'normal');
+  const type = kind || (rng() < 0.18 ? 'rare' : 'normal');
   const m = new THREE.Mesh(crystalGeo, crystalMats[type]);
   const { x, z } = freeSpot(3);
-  m.position.set(x, falling ? rand(12, 18) : C.HOVER_Y, z);
+  m.position.set(x, falling ? rr(12, 18) : C.HOVER_Y, z);
   m.castShadow = true;
   m.scale.setScalar(falling ? 1 : 0.001);
   m.userData = { type, phase: rand(0, Math.PI * 2), age: falling ? 1 : 0, falling, vy: 0 };
@@ -303,7 +330,7 @@ function spawnMine(hunter = false) {
 
 function pickPowerupType() {
   const entries = Object.entries(C.POWERUPS).filter(([key]) => !(key === 'shield' && game.shield >= C.MAX_SHIELD));
-  let r = Math.random() * entries.reduce((sum, [, p]) => sum + p.weight, 0);
+  let r = rng() * entries.reduce((sum, [, p]) => sum + p.weight, 0);
   for (const [key, p] of entries) {
     r -= p.weight;
     if (r <= 0) return key;
@@ -341,6 +368,7 @@ function resetWorld() {
   crystals.length = 0;
   mines.length = 0;
   removePowerup();
+  particles.clear();
   player.position.set(0, C.HOVER_Y, 0);
   player.visible = true;
   vel.set(0, 0, 0);
@@ -349,10 +377,17 @@ function resetWorld() {
   for (let i = 0; i < C.START_MINES; i++) spawnMine();
 }
 
+function setBiome(key) {
+  biomeKey = key;
+  switchWorld(key);
+  resetWorld();
+  renderer.compileAsync(scene, camera).catch(() => {});
+}
+
 // ---------------------------------------------------------------------------
 // Screens & HUD
 // ---------------------------------------------------------------------------
-const SCREENS = ['loading', 'start', 'pause', 'over', 'settings'];
+const SCREENS = ['loading', 'start', 'pause', 'over', 'settings', 'hangar'];
 let opaqueScreen = true; // Lade- und Startbildschirm verdecken die 3D-Szene komplett → nicht rendern
 
 function showScreen(id) {
@@ -405,6 +440,18 @@ function updateHud() {
     setFlag(`buff-${key}`, 'show', left > 0);
     if (left > 0) setStyle(`buffFill-${key}`, 'width', `${Math.round((left / C.POWERUPS[key].duration) * 100)}%`);
   }
+
+  game.missions.forEach((m, i) => {
+    setText(`missionVal${i}`, m.done ? '✓' : `${Math.floor(m.value)}/${m.def.goal}`);
+    setFlag(`mission${i}`, 'done', m.done);
+  });
+  setText('missionChip', `🎯 ${game.missions.filter((m) => m.done).length}/${game.missions.length}`);
+  setFlag('coach', 'show', game.coachT > 0);
+}
+
+function renderMissionList(listId) {
+  $(listId).innerHTML = game.missions.map((m) => `
+    <li class="${m.done ? 'done' : ''}"><span>${m.done ? '✓' : '○'} ${escapeHtml(m.def.text)}</span><b>${m.done ? `+${C.MISSION_BONUS}` : `${Math.floor(m.value)}/${m.def.goal}`}</b></li>`).join('');
 }
 
 function restartAnimation(el, className) {
@@ -463,33 +510,96 @@ function updateSettingsUI() {
     : 'Tipp: Bei Rucklern "Mittel" oder "Niedrig" wählen.';
 }
 
+function renderStartScreen() {
+  $('biomeCards').innerHTML = C.BIOME_ORDER.map((key) => {
+    const b = C.BIOMES[key];
+    const unlocked = isBiomeUnlocked(profile, key);
+    const best = profile.bestByBiome[key] || 0;
+    const detail = unlocked
+      ? (best > 0 ? `Bestwert ${fmt(best)}` : 'Noch nicht gespielt')
+      : `🔒 ${fmt(b.unlock.score)} Pkt. auf ${C.BIOMES[b.unlock.biome].name}`;
+    return `<button class="biome-card ${key}${unlocked ? '' : ' locked'}" data-biome="${key}" aria-pressed="${key === profile.biome}" ${unlocked ? '' : 'aria-disabled="true"'}>
+      <span class="biome-icon">${b.icon}</span><span class="biome-name">${b.name}</span><span class="biome-detail">${escapeHtml(detail)}</span>
+    </button>`;
+  }).join('');
+  const date = todayKey();
+  const dailyBest = profile.daily.date === date ? profile.daily.best : 0;
+  const daily = C.BIOMES[dailyBiome(date)];
+  $('dailyInfo').textContent = `${daily.icon} ${daily.name}${dailyBest ? ` · Heute: ${fmt(dailyBest)}` : ''}`;
+}
+
+function renderHangar() {
+  $('totalCrystals').textContent = fmt(profile.totalCrystals);
+  $('skinList').innerHTML = C.SKINS.map((skin) => {
+    const unlocked = isSkinUnlocked(profile, skin);
+    return `<button class="skin${unlocked ? '' : ' locked'}" data-skin="${skin.id}" aria-pressed="${skin.id === profile.skin}" ${unlocked ? '' : 'aria-disabled="true"'}>
+      <span class="swatch" style="--body:${skin.body};--glow:${skin.glow}"></span>
+      <span class="skin-name">${skin.name}</span>
+      <span class="skin-detail">${unlocked ? (skin.id === profile.skin ? 'Ausgewählt' : 'Freigeschaltet') : `🔒 ${fmt(skin.unlock)} 💎`}</span>
+    </button>`;
+  }).join('');
+}
+
 // ---------------------------------------------------------------------------
 // Spielablauf
 // ---------------------------------------------------------------------------
-function startGame() {
+function startGame(nextMode = 'normal') {
+  mode = nextMode;
   audio.unlock();
   audio.startMusic();
   audio.setPaused(false);
+  if (!engine) engine = audio.loop('engine');
   input.consumeBoost();
+
+  const date = todayKey();
+  rng = mode === 'daily' ? mulberry32(hashString(`kristalljaeger-${date}`)) : Math.random;
+  const key = mode === 'daily' ? dailyBiome(date) : profile.biome;
+  if (world.biome?.key !== key) switchWorld(key);
+  biomeKey = key;
+
   resetGame();
+  game.missions = pickMissions(rng);
   resetWorld();
+  game.coachT = profile.seenTutorial ? 0 : 8;
   state = 'playing';
   domCache.clear();
   showScreen(null);
   $('hud').hidden = false;
+  setText('modeBadge', mode === 'daily' ? `📅 TAGES-CHALLENGE · ${C.BIOMES[key].name}` : `${C.BIOMES[key].icon} ${C.BIOMES[key].name}`);
+  game.missions.forEach((m, i) => setText(`missionText${i}`, m.def.text));
   updateHud();
-  audio.voice('start');
+  audio.voice(C.BIOMES[key].voice);
 }
 
 function endGame(reason) {
   state = 'over';
   player.visible = true;
-  const isBest = game.score > best && game.score > 0;
-  if (isBest) {
-    best = game.score;
-    writeStorage(C.STORAGE_KEYS.best, best);
+  engine?.set(0, 1);
+
+  const biomesBefore = C.BIOME_ORDER.filter((k) => isBiomeUnlocked(profile, k));
+  const skinsBefore = C.SKINS.filter((s) => isSkinUnlocked(profile, s)).map((s) => s.id);
+  profile.totalCrystals += game.collected;
+  profile.games++;
+  profile.seenTutorial = true;
+
+  let isBest = false;
+  if (mode === 'daily') {
+    const date = todayKey();
+    if (profile.daily.date !== date) profile.daily = { date, best: 0 };
+    if (game.score > profile.daily.best) {
+      profile.daily.best = game.score;
+      isBest = game.score > 0;
+    }
+  } else if (game.score > (profile.bestByBiome[biomeKey] || 0)) {
+    profile.bestByBiome[biomeKey] = game.score;
+    isBest = game.score > 0;
   }
+  const newBiomes = C.BIOME_ORDER.filter((k) => isBiomeUnlocked(profile, k) && !biomesBefore.includes(k));
+  const newSkins = C.SKINS.filter((s) => isSkinUnlocked(profile, s) && !skinsBefore.includes(s.id));
+  saveProfile(profile);
+
   const rank = C.RANKS.find((r) => game.score >= r.min);
+  $('overMode').textContent = mode === 'daily' ? `📅 Tages-Challenge · ${C.BIOMES[biomeKey].name}` : `${C.BIOMES[biomeKey].icon} ${C.BIOMES[biomeKey].name}`;
   $('overTitle').textContent = reason === 'time' ? 'ZEIT ABGELAUFEN!' : 'SCHILD ZERSTÖRT!';
   $('overScore').textContent = `${fmt(game.score)} Punkte`;
   $('overRank').textContent = rank.rank;
@@ -500,20 +610,36 @@ function endGame(reason) {
   $('stMines').textContent = String(game.minesSmashed);
   $('stPower').textContent = String(game.powerupsTaken);
   $('overBest').hidden = !isBest;
+  $('overBest').textContent = mode === 'daily' ? '★ NEUER TAGES-BESTWERT ★' : '★ NEUER BESTWERT ★';
+  renderMissionList('overMissions');
+  const unlocks = [
+    ...newBiomes.map((k) => `🔓 ${C.BIOMES[k].icon} ${C.BIOMES[k].name} freigeschaltet!`),
+    ...newSkins.map((s) => `🔓 Drohnen-Skin „${s.name}“ freigeschaltet!`),
+  ];
+  $('overUnlocks').innerHTML = unlocks.map((u) => `<li>${escapeHtml(u)}</li>`).join('');
+  $('overUnlocks').hidden = unlocks.length === 0;
+  $('btnAgain').textContent = mode === 'daily' ? 'NOCHMAL (TAGES-CHALLENGE)' : 'NOCHMAL';
   showScreen('over');
-  if (isBest) audio.voice('record');
+
+  if (unlocks.length) audio.play('unlock');
+  if (newBiomes.length) audio.voice('newWorld');
+  else if (isBest) audio.voice('record');
   else if (reason === 'time') audio.voice('end');
   $('btnAgain').focus({ preventScroll: true });
 }
 
 function toMenu() {
   state = 'menu';
+  mode = 'normal';
+  rng = Math.random;
+  engine?.set(0, 1);
   $('hud').hidden = true;
   resetGame();
+  if (world.biome?.key !== profile.biome) switchWorld(profile.biome);
+  biomeKey = profile.biome;
   resetWorld();
   audio.setPaused(false);
-  $('bestStart').hidden = best <= 0;
-  $('bestStart').textContent = `Bestwert: ${fmt(best)}`;
+  renderStartScreen();
   showScreen('start');
 }
 
@@ -521,7 +647,9 @@ function togglePause() {
   if (state === 'playing') {
     state = 'paused';
     input.resetJoystick?.();
+    engine?.set(0, 1);
     audio.setPaused(true);
+    renderMissionList('pauseMissions');
     showScreen('pause');
   } else if (state === 'paused') {
     state = 'playing';
@@ -540,6 +668,18 @@ function closeSettings() {
   showScreen(settingsReturn);
 }
 
+function openHangar() {
+  state = 'hangar';
+  renderHangar();
+  showScreen('hangar');
+}
+
+function closeHangar() {
+  state = 'menu';
+  renderStartScreen();
+  showScreen('start');
+}
+
 function addCombo() {
   game.combo = game.comboTimer > 0 ? Math.min(game.combo + 1, 5) : 1;
   game.comboTimer = C.COMBO_WINDOW;
@@ -552,6 +692,8 @@ function collect(crystal, index) {
   const pts = C.CRYSTAL_TYPES[type].points * addCombo();
   game.score += pts;
   game.collected++;
+  if (type === 'rare') game.rare++;
+  if (type === 'gold') game.gold++;
   particles.burst(crystal.position, crystalBurst[type], type === 'normal' ? 14 : 22);
   audio.play('pickup', { volume: 0.8, rate: 1 + (game.combo - 1) * 0.07 });
   popup(crystal.position, `+${pts}`, type);
@@ -565,8 +707,9 @@ function smashMine(mine, index) {
   const pts = (hunter ? 60 : 25) * addCombo();
   game.score += pts;
   game.minesSmashed++;
+  if (hunter) game.huntersSmashed++;
   particles.burst(mine.position, COLORS.smash, 26, 9);
-  particles.burst(mine.position, COLORS.smashDark, 12, 5);
+  particles.burst(mine.position, COLORS.smashLight, 12, 5);
   audio.play('smash');
   shake = Math.max(shake, 0.35);
   vibrate(40);
@@ -597,13 +740,15 @@ function takePowerup() {
   removePowerup();
 }
 
-function hit(mine) {
+function hit(fromX, fromZ, source = 'mine') {
   game.shield--;
   game.invuln = 1.6;
   game.combo = 0;
   game.comboTimer = 0;
-  _v.subVectors(player.position, mine.position).setY(0).normalize();
-  vel.addScaledVector(_v, 16);
+  game.noHitTime = 0;
+  _v.set(player.position.x - fromX, 0, player.position.z - fromZ);
+  if (_v.lengthSq() < 0.001) _v.set(0, 0, 1);
+  vel.addScaledVector(_v.normalize(), 16);
   shake = 0.7;
   flash();
   audio.play('hit');
@@ -614,7 +759,74 @@ function hit(mine) {
     endGame('shield');
     return;
   }
-  toast('SCHILD −1', 'hit');
+  toast(source === 'lava' ? 'LAVA! SCHILD −1' : 'SCHILD −1', 'hit');
+}
+
+function updateMissions() {
+  for (const m of game.missions) {
+    if (m.done) continue;
+    m.value = Math.min(m.def.goal, game[m.def.stat]);
+    if (m.value >= m.def.goal) {
+      m.done = true;
+      game.score += C.MISSION_BONUS;
+      audio.play('mission');
+      announce(`AUFTRAG ERFÜLLT! +${C.MISSION_BONUS}`, 'mission');
+    }
+  }
+}
+
+// --- Gefahren: Lava-Geysire & Glatteis --------------------------------------------
+function spawnVent() {
+  let x;
+  let z;
+  if (rng() < C.LAVA.aimAtPlayer) {
+    x = player.position.x + vel.x * 0.5 + rr(-2, 2);
+    z = player.position.z + vel.z * 0.5 + rr(-2, 2);
+    const r = Math.hypot(x, z);
+    if (r > C.ARENA - 1) {
+      x *= (C.ARENA - 1) / r;
+      z *= (C.ARENA - 1) / r;
+    }
+  } else {
+    ({ x, z } = freeSpot(4));
+  }
+  game.vents.push({ x, z, t: C.LAVA.warn, r: C.LAVA.radius });
+}
+
+function erupt(vent) {
+  for (let i = 0; i < 34; i++) {
+    particles.emit(
+      vent.x + rand(-0.6, 0.6), 0.2, vent.z + rand(-0.6, 0.6),
+      rand(-3, 3), rand(8, 16), rand(-3, 3),
+      rand(0.7, 1.1), rand(0.9, 1.6), COLORS.lava[i % 3], 16
+    );
+  }
+  const dist = Math.hypot(player.position.x - vent.x, player.position.z - vent.z);
+  audio.play('eruption', { volume: clamp(1.2 - dist / 25, 0.25, 1) });
+  if (dist < 8) shake = Math.max(shake, 0.4 * (1 - dist / 8) + 0.1);
+  if (dist < vent.r && game.invuln === 0) hit(vent.x, vent.z, 'lava');
+}
+
+function updateHazards(dt) {
+  const hazard = C.BIOMES[biomeKey].hazard;
+  if (hazard !== 'lava') return;
+  game.lavaTimer -= dt;
+  if (game.lavaTimer <= 0) {
+    game.lavaTimer = rr(...C.LAVA.every) * (1 - (game.elapsed / C.GAME_TIME) * 0.35);
+    spawnVent();
+  }
+  for (let i = game.vents.length - 1; i >= 0; i--) {
+    const v = game.vents[i];
+    v.t -= dt;
+    if (Math.random() < dt * 14) {
+      particles.emit(v.x + rand(-1, 1) * v.r * 0.6, 0.1, v.z + rand(-1, 1) * v.r * 0.6, 0, rand(1, 3), 0, 0.5, 0.5, COLORS.ember, -1);
+    }
+    if (v.t <= 0) {
+      game.vents.splice(i, 1);
+      erupt(v);
+      if (state !== 'playing') return;
+    }
+  }
 }
 
 function updatePlayer(dt, t) {
@@ -633,10 +845,14 @@ function updatePlayer(dt, t) {
     particles.burst(player.position, COLORS.boost, 10, 4);
   }
 
+  const icePatches = world.biome?.icePatches ?? [];
+  game.onIce = icePatches.some((p) => (player.position.x - p.x) ** 2 + (player.position.z - p.z) ** 2 < p.r * p.r);
+
   const boosting = game.boostT > 0;
-  vel.addScaledVector(moveDir, (boosting ? 70 : 30) * dt);
-  vel.multiplyScalar(Math.exp(-3.2 * dt));
-  const maxSpeed = boosting ? 20 : 9.5;
+  const grip = game.onIce ? C.ICE.accel : 1;
+  vel.addScaledVector(moveDir, (boosting ? 70 : 30) * grip * dt);
+  vel.multiplyScalar(Math.exp(-(game.onIce ? C.ICE.drag : 3.2) * dt));
+  const maxSpeed = boosting ? 20 : game.onIce ? 12 : 9.5;
   if (vel.length() > maxSpeed) vel.setLength(maxSpeed);
 
   player.position.addScaledVector(vel, dt);
@@ -665,6 +881,7 @@ function updatePlayer(dt, t) {
   tilt.rotation.x = THREE.MathUtils.lerp(tilt.rotation.x, -(speed / 20) * 0.4, 1 - Math.exp(-8 * dt));
   thruster.scale.set(1, 0.4 + speed / 9 + (boosting ? 1.2 : 0), 1);
   thruster.position.z = 0.6 + thruster.scale.y * 0.5;
+  engine?.set(0.1 + (speed / 20) * 0.35 + (boosting ? 0.15 : 0), 0.8 + (speed / 20) * 0.7);
 
   trailTimer -= dt;
   if (trailTimer <= 0 && speed > 1.5) {
@@ -675,6 +892,9 @@ function updatePlayer(dt, t) {
       rand(-0.3, 0.3), rand(-0.1, 0.4), rand(-0.3, 0.3),
       boosting ? 0.45 : 0.3, boosting ? 0.9 : 0.5, boosting ? COLORS.boost : COLORS.trail, 0
     );
+    if (game.onIce && speed > 3) {
+      particles.emit(player.position.x + rand(-0.6, 0.6), 0.15, player.position.z + rand(-0.6, 0.6), rand(-1, 1), rand(0.5, 1.5), rand(-1, 1), 0.4, 0.45, COLORS.ice, 3);
+    }
   }
 
   game.invuln = Math.max(0, game.invuln - dt);
@@ -732,8 +952,8 @@ function updateMines(dt, t, moving) {
 
     _v.subVectors(d.target, m.position).setY(0);
     if (_v.length() < 0.8) {
-      if (Math.random() < 0.35) {
-        d.target.set(player.position.x + rand(-4, 4), C.HOVER_Y, player.position.z + rand(-4, 4));
+      if (rng() < 0.35) {
+        d.target.set(player.position.x + rr(-4, 4), C.HOVER_Y, player.position.z + rr(-4, 4));
       } else {
         const { x, z } = freeSpot(0);
         d.target.set(x, C.HOVER_Y, z);
@@ -760,6 +980,9 @@ function updatePowerupVisual(dt, t) {
 function updateGame(dt, t) {
   game.elapsed += dt;
   game.timeLeft -= dt;
+  game.coachT = Math.max(0, game.coachT - dt);
+  game.noHitTime += dt;
+  game.noHitBest = Math.max(game.noHitBest, game.noHitTime);
   if (!game.warned && game.timeLeft <= 10) {
     game.warned = true;
     audio.voice('warn');
@@ -791,7 +1014,7 @@ function updateGame(dt, t) {
     game.stormSpawn -= dt;
     if (game.stormSpawn <= 0) {
       game.stormSpawn = 0.3;
-      const roll = Math.random();
+      const roll = rng();
       spawnCrystal(roll < 0.3 ? 'gold' : roll < 0.5 ? 'rare' : 'normal', true);
     }
   }
@@ -822,7 +1045,7 @@ function updateGame(dt, t) {
   } else {
     game.powerupTimer -= dt;
     if (game.powerupTimer <= 0) {
-      game.powerupTimer = rand(...C.POWERUP_EVERY);
+      game.powerupTimer = rr(...C.POWERUP_EVERY);
       spawnPowerup();
     }
   }
@@ -855,20 +1078,28 @@ function updateGame(dt, t) {
     if (game.boostT > 0) {
       smashMine(m, i);
     } else if (game.invuln === 0) {
-      hit(m);
+      hit(m.position.x, m.position.z);
       if (state !== 'playing') return;
       break;
     }
   }
 
+  updateHazards(dt);
+  if (state !== 'playing') return;
+  updateMissions();
   updateHud();
 }
 
-function updateGlows() {
+function updateGlows(t) {
   glow.begin();
   for (const c of crystals) glow.add(c.position.x, c.position.z, c.userData.falling ? 1.2 : 2.3, crystalGlow[c.userData.type]);
   for (const m of mines) glow.add(m.position.x, m.position.z, m.userData.hunter ? 3.2 : 2.4, mineGlow[m.userData.hunter ? 'hunter' : 'normal']);
   if (powerup) glow.add(powerup.position.x, powerup.position.z, 3.2, powerGlow[powerup.userData.type]);
+  for (const v of game.vents ?? []) {
+    const progress = 1 - v.t / C.LAVA.warn;
+    _glowColor.copy(COLORS.lavaWarn).multiplyScalar(0.5 + progress * 0.8 + Math.sin(t * 30) * 0.15 * progress);
+    glow.add(v.x, v.z, v.r * 2.4 * (0.35 + 0.65 * progress), _glowColor, 0.07);
+  }
   let playerColor = COLORS.playerGlow;
   if (game.buffs?.magnet > 0) playerColor = COLORS.magnetGlow;
   else if (game.buffs?.double > 0) playerColor = COLORS.doubleGlow;
@@ -884,14 +1115,21 @@ const lookGoal = new THREE.Vector3();
 const look = new THREE.Vector3();
 
 function updateCamera(dt, t) {
+  const portrait = camera.aspect < 1;
   if (state === 'menu' || state === 'loading') {
     const a = t * 0.1;
-    const dist = camera.aspect < 1 ? 48 : 36;
-    camGoal.set(Math.sin(a) * dist, camera.aspect < 1 ? 26 : 18, Math.cos(a) * dist);
+    const dist = portrait ? 48 : 36;
+    camGoal.set(Math.sin(a) * dist, portrait ? 26 : 18, Math.cos(a) * dist);
     lookGoal.set(0, -1, 0);
     camera.position.lerp(camGoal, 1 - Math.exp(-2 * dt));
+  } else if (state === 'hangar') {
+    // Drohne im oberen Bildteil halten, unten liegt die Hangar-Karte
+    const a = t * 0.35;
+    const dist = portrait ? 11 : 9;
+    camGoal.set(player.position.x + Math.sin(a) * dist, 3.4, player.position.z + Math.cos(a) * dist);
+    lookGoal.set(player.position.x, portrait ? -2.2 : -0.7, player.position.z);
+    camera.position.lerp(camGoal, 1 - Math.exp(-3 * dt));
   } else {
-    const portrait = camera.aspect < 1;
     camGoal.set(player.position.x * 0.8, portrait ? 25 : 16, player.position.z * 0.8 + (portrait ? 14 : 16));
     lookGoal.set(player.position.x, 0, player.position.z - (portrait ? 1 : 2));
     camera.position.lerp(camGoal, 1 - Math.exp(-4 * dt));
@@ -932,6 +1170,7 @@ renderer.setAnimationLoop(() => {
   last = now;
   const dt = Math.min(rawDt, 0.05);
   trackPerformance(rawDt);
+  input.pollGamepad(onPad);
 
   if (state !== 'paused') {
     time += dt;
@@ -940,15 +1179,16 @@ renderer.setAnimationLoop(() => {
     } else {
       updateCrystals(dt, time);
       updateMines(dt, time, false);
-      if (state === 'menu' || state === 'loading') {
+      if (state === 'menu' || state === 'loading' || state === 'hangar') {
         player.position.y = C.HOVER_Y + Math.sin(time * 3) * 0.12;
-        player.rotation.y += dt * 0.6;
+        player.rotation.y += dt * (state === 'hangar' ? 0.25 : 0.6);
+        tilt.rotation.set(0, 0, 0);
       }
     }
     if (powerup && state !== 'playing') powerup.userData.age = Math.min(powerup.userData.age, 1);
     updatePowerupVisual(dt, time);
     particles.update(dt, time);
-    updateGlows();
+    updateGlows(time);
     updateCamera(dt, time);
   }
   if (opaqueScreen) return;
@@ -1009,9 +1249,11 @@ async function loadAll() {
 // Eingabe & UI-Verdrahtung
 // ---------------------------------------------------------------------------
 function onKey(e) {
+  document.body.classList.remove('gamepad');
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code) && state === 'playing') e.preventDefault();
   if (e.code === 'KeyP' || e.code === 'Escape') {
     if (!$('settings').hidden) closeSettings();
+    else if (state === 'hangar') closeHangar();
     else togglePause();
   }
   if (e.code === 'KeyM') {
@@ -1025,6 +1267,39 @@ function onKey(e) {
   }
 }
 
+// Gamepad: im Spiel steuern, in Menüs Fokus bewegen und bestätigen
+function onPad(button) {
+  document.body.classList.add('gamepad');
+  if (state === 'playing') {
+    if (button === 'a' || button === 'rt' || button === 'rb') input.boostQueued = true;
+    if (button === 'start') togglePause();
+    return;
+  }
+  const screenId = SCREENS.find((s) => !$(s).hidden);
+  if (!screenId || screenId === 'loading') return;
+  const buttons = [...$(screenId).querySelectorAll('button:not([disabled]):not([hidden])')].filter((b) => b.offsetParent !== null);
+  if (!buttons.length) return;
+  let index = buttons.indexOf(document.activeElement);
+  if (button === 'up' || button === 'left') {
+    index = index <= 0 ? buttons.length - 1 : index - 1;
+    buttons[index].focus();
+  } else if (button === 'down' || button === 'right') {
+    index = (index + 1) % buttons.length;
+    buttons[index].focus();
+  } else if (button === 'a') {
+    (buttons[index] || buttons[0]).click();
+  } else if (button === 'b') {
+    if (screenId === 'settings') closeSettings();
+    else if (screenId === 'hangar') closeHangar();
+    else if (screenId === 'pause') togglePause();
+    else if (screenId === 'over') toMenu();
+  } else if (button === 'start') {
+    if (screenId === 'pause') togglePause();
+    else if (screenId === 'start') startGame();
+    else if (screenId === 'over') startGame(mode);
+  }
+}
+
 function enableTouchUI() {
   if (touchUI) return;
   touchUI = true;
@@ -1035,10 +1310,22 @@ function enableTouchUI() {
 input.bindTouch({ zone: $('joyZone'), base: $('joyBase'), knob: $('joyKnob'), boost: $('btnBoost') });
 if (touchPreferred) enableTouchUI();
 window.addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') enableTouchUI(); }, { capture: true });
+window.addEventListener('gamepadconnected', () => {
+  document.body.classList.add('gamepad');
+  toast('🎮 CONTROLLER VERBUNDEN');
+});
 
-$('btnStart').addEventListener('click', startGame);
-$('btnAgain').addEventListener('click', startGame);
-$('btnRestart').addEventListener('click', startGame);
+// Erste Interaktion schaltet Audio frei; Menü-Klicks bekommen einen Sound
+document.addEventListener('click', (e) => {
+  audio.unlock();
+  if (state !== 'loading') audio.startMusic();
+  if (e.target.closest('button')) audio.play('click', { volume: 0.5 });
+}, { capture: true });
+
+$('btnStart').addEventListener('click', () => startGame('normal'));
+$('btnDaily').addEventListener('click', () => startGame('daily'));
+$('btnAgain').addEventListener('click', () => startGame(mode));
+$('btnRestart').addEventListener('click', () => startGame(mode));
 $('btnMenu').addEventListener('click', toMenu);
 $('btnMenuPause').addEventListener('click', toMenu);
 $('btnResume').addEventListener('click', togglePause);
@@ -1046,6 +1333,43 @@ $('btnPauseHud').addEventListener('click', togglePause);
 $('btnSettingsStart').addEventListener('click', openSettings);
 $('btnSettingsPause').addEventListener('click', openSettings);
 $('btnSettingsBack').addEventListener('click', closeSettings);
+$('btnHangar').addEventListener('click', openHangar);
+$('btnHangarBack').addEventListener('click', closeHangar);
+
+$('biomeCards').addEventListener('click', (e) => {
+  const card = e.target.closest('.biome-card');
+  if (!card) return;
+  const key = card.dataset.biome;
+  if (!isBiomeUnlocked(profile, key)) {
+    card.classList.remove('shake');
+    void card.offsetWidth;
+    card.classList.add('shake');
+    return;
+  }
+  profile.biome = key;
+  saveProfile(profile);
+  setBiome(key);
+  renderStartScreen();
+  $('biomeCards').querySelector(`[data-biome="${key}"]`)?.focus();
+});
+
+$('skinList').addEventListener('click', (e) => {
+  const card = e.target.closest('.skin');
+  if (!card) return;
+  const skin = C.SKINS.find((s) => s.id === card.dataset.skin);
+  if (!isSkinUnlocked(profile, skin)) {
+    card.classList.remove('shake');
+    void card.offsetWidth;
+    card.classList.add('shake');
+    return;
+  }
+  profile.skin = skin.id;
+  saveProfile(profile);
+  applySkin(skin.id);
+  particles.burst(player.position, COLORS.boost, 18, 4);
+  renderHangar();
+  $('skinList').querySelector(`[data-skin="${skin.id}"]`)?.focus();
+});
 
 for (const btn of document.querySelectorAll('#qualitySeg button')) {
   btn.addEventListener('click', () => {
@@ -1073,6 +1397,24 @@ $('tglFps').addEventListener('click', () => {
   updateSettingsUI();
 });
 
+// Installierbare Web-App
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  $('btnInstall').hidden = false;
+});
+$('btnInstall').addEventListener('click', async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice.catch(() => {});
+  installPrompt = null;
+  $('btnInstall').hidden = true;
+});
+if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+
 window.addEventListener('resize', resize);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && state === 'playing') togglePause();
@@ -1094,25 +1436,36 @@ function moveToNearest(list) {
 
 window.__kj = {
   snapshot: () => ({
-    state, quality, fps: Math.round(perf.fps), score: game.score, timeLeft: Number(game.timeLeft.toFixed(2)),
+    state, mode, biome: biomeKey, quality, fps: Math.round(perf.fps), score: game.score, timeLeft: Number(game.timeLeft.toFixed(2)),
     shield: game.shield, combo: game.combo, collected: game.collected, smashed: game.minesSmashed,
     crystals: crystals.length, mines: mines.length, hunter: mines.some((m) => m.userData.hunter),
-    powerup: powerup?.userData.type ?? null, buffs: { ...game.buffs }, touchUI,
+    powerup: powerup?.userData.type ?? null, buffs: { ...game.buffs }, touchUI, onIce: game.onIce, vents: game.vents.length,
+    missions: game.missions.map((m) => `${m.def.id}:${Math.floor(m.value)}/${m.def.goal}${m.done ? '✓' : ''}`),
     player: { x: Number(player.position.x.toFixed(2)), z: Number(player.position.z.toFixed(2)) },
     drawCalls: renderer.info.render.calls,
   }),
+  profile: () => JSON.parse(JSON.stringify(profile)),
   debugMoveToNearestCrystal: () => moveToNearest(crystals),
   debugMoveToNearestMine: () => moveToNearest(mines),
   debugMoveToPowerup: () => powerup && player.position.set(powerup.position.x, player.position.y, powerup.position.z),
+  debugMoveToIce: () => {
+    const p = world.biome?.icePatches?.[0];
+    if (p) player.position.set(p.x, player.position.y, p.z);
+  },
   debugSpawnPowerup: (type) => spawnPowerup(type),
   debugSetTime: (s) => { game.timeLeft = s; },
   debugSetElapsed: (s) => { game.elapsed = s; },
   debugBoost: () => { input.boostQueued = true; },
+  debugAddCrystals: (n) => { profile.totalCrystals += n; saveProfile(profile); },
+  debugSetBest: (biome, score) => { profile.bestByBiome[biome] = score; saveProfile(profile); renderStartScreen(); },
+  debugPad: (button) => onPad(button),
 };
 
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
+applySkin(profile.skin);
+switchWorld(biomeKey);
 resetGame();
 resetWorld();
 resize();
@@ -1120,7 +1473,6 @@ applyQuality(preferredQuality());
 showScreen('loading');
 
 loadAll().then(() => {
-  state = 'menu';
   $('btnStart').disabled = false;
   toMenu();
 });
