@@ -912,14 +912,21 @@ function closeSettings() {
   showScreen(settingsReturn);
 }
 
+// Im Hangar steht nur die Drohne im Bild – Kristalle & Minen würden die Nahaufnahme verdecken
+function setEntitiesVisible(visible) {
+  for (const o of [...crystals, ...mines]) o.visible = visible;
+}
+
 function openHangar() {
   state = 'hangar';
+  setEntitiesVisible(false);
   renderHangar();
   showScreen('hangar');
 }
 
 function closeHangar() {
   state = 'menu';
+  setEntitiesVisible(true);
   renderStartScreen();
   showScreen('start');
 }
@@ -1358,6 +1365,11 @@ function updateGame(dt, t) {
 
 function updateGlows(t) {
   glow.begin();
+  if (state === 'hangar') {
+    glow.add(player.position.x, player.position.z, 2.6, COLORS.playerGlow);
+    glow.end();
+    return;
+  }
   for (const c of crystals) glow.add(c.position.x, c.position.z, c.userData.falling ? 1.2 : 2.3, crystalGlow[c.userData.type]);
   for (const m of mines) glow.add(m.position.x, m.position.z, m.userData.hunter ? 3.2 : 2.4, mineGlow[m.userData.hunter ? 'hunter' : 'normal']);
   if (powerup) glow.add(powerup.position.x, powerup.position.z, 3.2, powerGlow[powerup.userData.type]);

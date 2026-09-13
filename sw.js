@@ -1,5 +1,5 @@
 // Automatisch erzeugt von build.mjs – nicht von Hand bearbeiten
-const CACHE = 'kristalljaeger-0f480da07839';
+const CACHE = 'kristalljaeger-200404e086d0';
 const FILES = [
   "./",
   "index.html",
