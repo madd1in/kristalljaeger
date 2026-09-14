@@ -253,15 +253,18 @@ const mineMats = {
   normal: { body: std('#4a0f14', { metalness: 0.5, roughness: 0.5 }), eye: new THREE.MeshStandardMaterial({ color: '#ef4444', emissive: '#ef4444', emissiveIntensity: 2 }) },
   hunter: { body: std('#2e1065', { metalness: 0.5, roughness: 0.45 }), eye: new THREE.MeshStandardMaterial({ color: '#c084fc', emissive: '#c084fc', emissiveIntensity: 2.5 }) },
 };
-const mineGlow = { normal: color('#ef4444', 0.55), hunter: color('#a855f7', 0.7), titan: color('#f97316', 0.9) };
+const mineGlow = { normal: color('#ef4444', 0.55), hunter: color('#a855f7', 0.7), titan: color('#f97316', 0.5) };
 
 // Titan-Mine: gleiche Grundform, dunkles Metall, glühende Ringe
 const titanMats = {
-  body: std('#52525b', { metalness: 0.7, roughness: 0.35 }),
+  body: std('#8a8a96', { metalness: 0.55, roughness: 0.4 }),
   eye: new THREE.MeshStandardMaterial({ color: '#fb923c', emissive: '#f97316', emissiveIntensity: 3 }),
-  ring: new THREE.MeshStandardMaterial({ color: '#f97316', emissive: '#ea580c', emissiveIntensity: 2.2, flatShading: true }),
+  ring: new THREE.MeshStandardMaterial({ color: '#f97316', emissive: '#ea580c', emissiveIntensity: 1.3, flatShading: true }),
 };
 const titanRingGeo = new THREE.TorusGeometry(1.15, 0.08, 6, 32);
+
+// Titan: nach dem Laden eigenes Blender-Modell (größer modelliert → kleinerer Skalierungsfaktor)
+const titanModel = { shell: null, glow: null, scale: 2.4 };
 
 const powerGeo = {
   magnet: mergeGeometries([
@@ -369,13 +372,13 @@ function showNextAchievement() {
 // --- Titan-Mine (Boss) ---------------------------------------------------------------
 function spawnTitan() {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(mineGeo, titanMats.body);
+  const body = new THREE.Mesh(titanModel.shell ?? mineGeo, titanMats.body);
   body.castShadow = true;
   const ringA = new THREE.Mesh(titanRingGeo, titanMats.ring);
   ringA.rotation.x = Math.PI / 2;
   const ringB = new THREE.Mesh(titanRingGeo, titanMats.ring);
   ringB.rotation.y = Math.PI / 2;
-  g.add(body, new THREE.Mesh(eyeGeo, titanMats.eye), ringA, ringB);
+  g.add(body, new THREE.Mesh(titanModel.glow ?? eyeGeo, titanMats.eye), ringA, ringB);
   const { x, z } = freeSpot(14);
   g.position.set(x, C.HOVER_Y + 0.6, z);
   g.scale.setScalar(0.001);
@@ -440,11 +443,11 @@ function updateTitan(dt, t) {
   const m = T.mesh;
   T.age += dt;
   T.hitCd = Math.max(0, T.hitCd - dt);
-  m.scale.setScalar(Math.min(1, T.age * 1.2) * 2.4);
+  m.scale.setScalar(Math.min(1, T.age * 1.2) * titanModel.scale);
   m.rotation.y += dt * 0.8;
   T.rings[0].rotation.z += dt * 2;
   T.rings[1].rotation.x += dt * 1.6;
-  titanMats.eye.emissiveIntensity = 2.5 + Math.sin(t * 8) * 1.5;
+  titanMats.eye.emissiveIntensity = 1.4 + Math.sin(t * 8) * 0.6;
   m.position.y = C.HOVER_Y + 0.6 + Math.sin(t * 1.8) * 0.3;
   if (T.age < 1.2) return;
 
@@ -1373,7 +1376,7 @@ function updateGlows(t) {
   for (const c of crystals) glow.add(c.position.x, c.position.z, c.userData.falling ? 1.2 : 2.3, crystalGlow[c.userData.type]);
   for (const m of mines) glow.add(m.position.x, m.position.z, m.userData.hunter ? 3.2 : 2.4, mineGlow[m.userData.hunter ? 'hunter' : 'normal']);
   if (powerup) glow.add(powerup.position.x, powerup.position.z, 3.2, powerGlow[powerup.userData.type]);
-  if (game.titan) glow.add(game.titan.mesh.position.x, game.titan.mesh.position.z, 7 + Math.sin(t * 6) * 0.6, mineGlow.titan);
+  if (game.titan) glow.add(game.titan.mesh.position.x, game.titan.mesh.position.z, 5.5 + Math.sin(t * 6) * 0.4, mineGlow.titan);
   for (const v of game.vents ?? []) {
     const progress = 1 - v.t / C.LAVA.warn;
     _glowColor.copy(COLORS.lavaWarn).multiplyScalar(0.5 + progress * 0.8 + Math.sin(t * 30) * 0.15 * progress);
@@ -1490,6 +1493,13 @@ function applyModels(models) {
     mat.needsUpdate = true;
   }
   crystalGeo = models.crystal.scale(1.15, 1.15, 1.15);
+  Object.assign(titanModel, { shell: models.titan.shell, glow: models.titan.glow, scale: 1.9 });
+  for (const [type, geo] of Object.entries(models.powerups)) {
+    powerGeo[type] = geo;
+    powerMats[type].core.vertexColors = true;
+    powerMats[type].core.needsUpdate = true;
+  }
+  world.setEnvironmentModels(models.env);
   resetWorld();
 }
 

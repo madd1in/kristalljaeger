@@ -3,6 +3,15 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ARENA, BIOMES, ICE } from './config.js';
+import { colorByMaterial } from './models.js';
+
+// Farben der Blender-Umgebungsmodelle je Welt (Materialnamen aus Blender)
+const ENV_PALETTE = {
+  pine: { Trunk: '#5b3a29', Leaf: '#2f5d3a', LeafLight: '#3f7d45' },
+  round: { Trunk: '#6b4430', Leaf: '#4f8f3c', LeafLight: '#62a848' },
+  snow: { Trunk: '#4b3528', Leaf: '#24483d', LeafLight: '#2d5a4a', Snow: '#eef4fb' },
+  dead: { Trunk: '#292524' },
+};
 
 export const rand = (a, b) => a + Math.random() * (b - a);
 
@@ -93,7 +102,17 @@ function disposeTree(root) {
 // ---------------------------------------------------------------------------------
 // Baum-Geometrien je Welt
 // ---------------------------------------------------------------------------------
-function treeSets(style) {
+function treeSets(style, env) {
+  if (env) {
+    // Blender-Modelle; Eisspitzen und Basaltsäulen bleiben prozedural
+    const procedural = treeSets(style, null);
+    if (style === 'frost') return [{ geo: colorByMaterial(env.snow, ENV_PALETTE.snow), count: 36 }, procedural[1]];
+    if (style === 'volcano') return [{ geo: colorByMaterial(env.dead, ENV_PALETTE.dead, 0.04), count: 26 }, procedural[1]];
+    return [
+      { geo: colorByMaterial(env.pine, ENV_PALETTE.pine), count: 30 },
+      { geo: colorByMaterial(env.round, ENV_PALETTE.round), count: 14 },
+    ];
+  }
   if (style === 'frost') {
     const snowyPine = mergeGeometries([
       paint(new THREE.CylinderGeometry(0.15, 0.22, 0.8, 5).translate(0, 0.4, 0), shade('#4b3528')),
@@ -140,7 +159,7 @@ const FLOATER_TREE = { meadow: '#2f5d3a', frost: '#e2e8f0', volcano: '#1c1917' }
 // ---------------------------------------------------------------------------------
 // Insel einer Welt aufbauen
 // ---------------------------------------------------------------------------------
-function buildBiome(key) {
+function buildBiome(key, env = null) {
   const b = BIOMES[key];
   const group = new THREE.Group();
   const makeInstanced = (geo, material, count, { castShadow = false, receiveShadow = false } = {}) => {
@@ -180,7 +199,7 @@ function buildBiome(key) {
   group.add(arenaRing);
 
   // Bäume & Co. am Rand
-  for (const set of treeSets(b.trees)) {
+  for (const set of treeSets(b.trees, env)) {
     const mesh = makeInstanced(set.geo, lambert(), set.count, { castShadow: true });
     for (let i = 0; i < set.count; i++) {
       const a = rand(0, Math.PI * 2), r = rand(20.8, 23.4);
@@ -188,10 +207,21 @@ function buildBiome(key) {
     }
   }
 
-  const rocks = makeInstanced(paint(roughen(new THREE.DodecahedronGeometry(1, 0), 0.3), shade(b.rock, 0.1)), lambert(), 22, { castShadow: true });
-  for (let i = 0; i < rocks.count; i++) {
-    const a = rand(0, Math.PI * 2), r = rand(20.4, 23.6);
-    setInstance(rocks, i, Math.cos(a) * r, 0.15, Math.sin(a) * r, rand(0.35, 1.1), rand(0, 6), rand(0, 3), rand(0, 3));
+  if (env) {
+    const rockPalette = { Rock: b.rock, RockDark: `#${new THREE.Color(b.rock).multiplyScalar(0.6).getHexString()}` };
+    for (const [variant, count] of [['rockA', 12], ['rockB', 10]]) {
+      const rocks = makeInstanced(colorByMaterial(env[variant], rockPalette, 0.08), lambert(), count, { castShadow: true });
+      for (let i = 0; i < count; i++) {
+        const a = rand(0, Math.PI * 2), r = rand(20.4, 23.6);
+        setInstance(rocks, i, Math.cos(a) * r, 0, Math.sin(a) * r, rand(0.5, 1.4), rand(0, 6));
+      }
+    }
+  } else {
+    const rocks = makeInstanced(paint(roughen(new THREE.DodecahedronGeometry(1, 0), 0.3), shade(b.rock, 0.1)), lambert(), 22, { castShadow: true });
+    for (let i = 0; i < rocks.count; i++) {
+      const a = rand(0, Math.PI * 2), r = rand(20.4, 23.6);
+      setInstance(rocks, i, Math.cos(a) * r, 0.15, Math.sin(a) * r, rand(0.35, 1.1), rand(0, 6), rand(0, 3), rand(0, 3));
+    }
   }
 
   const bladeGeos = [];
@@ -493,9 +523,16 @@ export function createWorld() {
 
   let biome = null;
   let detail = null;
+  let envModels = null;
 
-  function setBiome(key) {
-    if (biome?.key === key) return biome;
+  // Blender-Umgebungsmodelle übernehmen und die aktuelle Welt damit neu aufbauen
+  function setEnvironmentModels(env) {
+    envModels = env;
+    if (biome) setBiome(biome.key, true);
+  }
+
+  function setBiome(key, force = false) {
+    if (biome?.key === key && !force) return biome;
     if (biome) {
       scene.remove(biome.group);
       disposeTree(biome.group);
@@ -512,7 +549,7 @@ export function createWorld() {
     sun.intensity = b.sun[1];
     dustMat.uniforms.uColor.value.set(b.dust.color);
     dustMat.uniforms.uMode.value = b.dust.mode;
-    biome = buildBiome(key);
+    biome = buildBiome(key, envModels);
     scene.add(biome.group);
     if (detail) biome.setDetail(detail);
     return biome;
@@ -532,7 +569,7 @@ export function createWorld() {
   }
 
   return {
-    scene, sun, update, setDetail, setBiome,
+    scene, sun, update, setDetail, setBiome, setEnvironmentModels,
     get biome() { return biome; },
   };
 }
